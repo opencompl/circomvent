@@ -1,14 +1,16 @@
 -- https://github.com/Veridise/llzk-lib/blob/5680d910854e71b1b92b02e4f69271c4345caedf/test/FrontendLang/Circom/circomlib.llzk
-import Mathlib.RingTheory.Polynomial.Quotient
-import Mathlib.RingTheory.Ideal.Defs
-import Mathlib.RingTheory.Ideal.Basic
-import Mathlib.Data.ZMod.Defs
-import Mathlib.Data.ZMod.Basic
-import Mathlib.Algebra.MonoidAlgebra.Basic
-import Mathlib.Algebra.Polynomial.RingDivision
-import Mathlib.Data.Finset.Sort
-import Mathlib.Data.List.ToFinsupp
-import Mathlib.Data.List.Basic
+-- import Mathlib.RingTheory.Polynomial.Quotient
+-- import Mathlib.RingTheory.Ideal.Defs
+-- import Mathlib.RingTheory.Ideal.Basic
+-- import Mathlib.Data.ZMod.Defs
+-- import Mathlib.Data.ZMod.Basic
+-- import Mathlib.Data.Nat.Prime.Defs
+-- import Mathlib.Algebra.MonoidAlgebra.Basic
+-- import Mathlib.Algebra.Polynomial.RingDivision
+-- import Mathlib.Data.Finset.Sort
+-- import Mathlib.Data.List.ToFinsupp
+-- import Mathlib.Data.List.Basic
+import Mathlib
 import CompPoly.CMvPolynomial
 
 /-# Example IsZero Program
@@ -52,14 +54,15 @@ inductive Var (ι ε ω : Type)
 | existential (e : ε)
 deriving DecidableEq, Inhabited, Repr, BEq, Hashable
 
-
 /-- Map the variables in a Var to another Var. -/
+@[simp]
 def Var.map (f : ι₁ → ι₂) (g : ε₁ → ε₂) (h : ω₁ → ω₂) :
     Var ι₁ ε₁ ω₁ → Var ι₂ ε₂ ω₂
 | Var.input i => Var.input (f i)
 | Var.existential e => Var.existential (g e)
 | Var.output o => Var.output (h o)
 
+@[simp]
 def Var.mapInput (f : ι₁ → ι₂) : Var ι₁ ε ω → Var ι₂ ε ω :=
     Var.map f id id
 
@@ -76,7 +79,7 @@ def ConstraintSystem.IsSat {α : Type} {p : Nat}
    (cs : ConstraintSystem α p)
    /- env assigns values to each variable. -/
    (env : α → ZMod p) : Prop :=
-   ∀ poly ∈ cs, poly.aeval env = 0
+   ∀ poly ∈ cs, poly.eval env = 0
 
 /-- Minimal embedding of Circom syntax.
 Can eventually be moved to the `lean-mlir` syntax embedding.
@@ -127,6 +130,7 @@ noncomputable def aeval (e : PolyExpr α p)
     (e.toPolynomial).aeval env
 
 /-- Evaluate a `PolyExpr` in an environment `env : α → ZMod p`. -/
+@[simp]
 def eval (e : PolyExpr α p) (env : α → ZMod p) : ZMod p :=
   match e with
   | PolyExpr.const c => c
@@ -154,6 +158,14 @@ theorem eval_neg {α : Type} {p : Nat}
   simp only [neg, eval]
   ring
 
+@[simp]
+theorem toPolynomial_neg {α : Type} {p : Nat}
+    (e : PolyExpr α p) :
+    (- e).toPolynomial = - (e.toPolynomial) := by
+  ext
+  rw [← neg_def]
+  simp [neg, toPolynomial]
+
 def sub {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) : PolyExpr α p :=
   e1 + (-e2)
@@ -163,7 +175,7 @@ instance : Sub (PolyExpr α p) where
 
 @[simp] theorem sub_def {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) :
-    (e1 - e2) = e1.sub e2 := by rfl
+    e1.sub e2 = e1 - e2 := by rfl
 
 @[simp]
 theorem eval_sub {α : Type} {p : Nat}
@@ -171,6 +183,14 @@ theorem eval_sub {α : Type} {p : Nat}
     (e1 - e2).eval = fun env => (e1.eval env) - (e2.eval env) := by
   ext a
   simp [sub, eval]
+  ring
+
+@[simp]
+theorem toPolynomial_sub {α : Type} {p : Nat}
+    (e1 e2 : PolyExpr α p) :
+    (e1 - e2).toPolynomial = (e1.toPolynomial) - (e2.toPolynomial) := by
+  ext
+  simp [sub, toPolynomial]
   ring
 
 end PolyExpr
@@ -230,6 +250,7 @@ instance : Mul (FieldExpr α p) where
 instance : Inv (FieldExpr α p) where
   inv e := FieldExpr.mulinv e
 
+@[simp]
 def FieldExpr.eval
     (env : α → ZMod p)
     (e : FieldExpr α p) : ZMod p :=
@@ -255,6 +276,7 @@ inductive WitnessExpr (α: Type) (p : Nat) : Type
 | field : FieldExpr α p → WitnessExpr α p
 | select (cond : BoolExpr α p) (thenBranch elseBranch : PolyExpr α p)
 
+@[simp]
 noncomputable def WitnessExpr.eval
     (env : α → ZMod p)
     (t : WitnessExpr α p) : ZMod p :=
@@ -286,45 +308,150 @@ structure Program (ι ε ω : Type) (p : Nat) where
 
 /-- Create a constraint system from 'Program',
 by converting each `Stmt.constraint` into a `Constraint`. -/
-noncomputable def Program.toConstraintSystem (prog : Program ι ε ω p) :
+noncomputable def Program.toConstraintSystem_go (stmts : List (Stmt ι ε ω p)) :
    ConstraintSystem (Var ι ε ω) p :=
-    prog.stmts.foldl (init := [])
-      (fun acc stmt =>
-        match stmt.toConstraint with
-        | .some c => c :: acc
-        | none => acc)
+   -- TODO: why does `List.foldl` not work here? Think if we need a different fold.
+    match stmts with
+    | [] => []
+    | stmt :: stmts' =>
+        match stmt with
+        | Stmt.constraint lhs? c =>
+          let lhsPoly : PolyExpr (Var ι ε ω) p :=
+            match lhs? with
+            | none => 0
+            | some lhs => (PolyExpr.var (lhs.mapInput Empty.elim))
+          (c - lhsPoly).toPolynomial :: Program.toConstraintSystem_go stmts'
+        | Stmt.assign .. => Program.toConstraintSystem_go stmts'
+
+@[simp]
+noncomputable def Program.toConstraintSystem (prog : Program ι ε ω p) :
+    ConstraintSystem (Var ι ε ω) p :=
+    (Program.toConstraintSystem_go prog.stmts)
+
+@[simp]
+theorem Program.toConstraintSystem_go_nil_eq :
+    Program.toConstraintSystem_go ([] : List (Stmt ι ε ω p)) = [] := by
+  rfl
+
+@[simp]
+theorem Program.toConstraintSystem_go_cons_eq
+    (stmts : List (Stmt ι ε ω p))
+    (v : Var Empty ε ω) (e : WitnessExpr (Var ι ε ω) p)
+    :
+    Program.toConstraintSystem_go ((Stmt.assign v e) :: stmts) =
+    (Program.toConstraintSystem_go stmts) := by rfl
+
+@[simp]
+theorem Program.toConstraintSystem_constraint_none_cons_eq
+    (stmts : List (Stmt ι ε ω p))  (e : PolyExpr (Var ι ε ω) p)
+    :
+    Program.toConstraintSystem_go ((Stmt.constraint none e) :: stmts) =
+    (e.toPolynomial :: Program.toConstraintSystem_go stmts) := by
+  simp [toConstraintSystem_go]
+  simp [PolyExpr.toPolynomial]
+
+@[simp]
+theorem Program.toConstraintSystem_constraint_cons_eq
+    (stmts : List (Stmt ι ε ω p))
+    (v : (Var Empty ε ω)) (e : PolyExpr (Var ι ε ω) p)
+    :
+    Program.toConstraintSystem_go ((Stmt.constraint (some v) e) :: stmts) =
+    ((e - (PolyExpr.var (v.mapInput Empty.elim))).toPolynomial :: Program.toConstraintSystem_go stmts) := by
+  simp [toConstraintSystem_go]
+
+
+def envUpdate
+    [DecidableEq α]
+    (env : α → β)
+    (var : α)
+    (o : β) :
+    α → β := fun vnew => if vnew = var then o else env vnew
+
+noncomputable def Stmt.execute_go
+    [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+    {p : Nat}
+    (env : (Var ι ε ω) → (ZMod p))
+    (stmt : Stmt ι ε ω p) :
+    (Var ι ε ω) → (ZMod p) :=
+    match stmt with
+    | Stmt.assign var rhs =>
+      let o := rhs.eval env
+      -- env' := env [var := o]
+      let env' := envUpdate env (var.mapInput Empty.elim) o
+      env'
+    | Stmt.constraint lhs? rhs =>
+      match lhs? with
+      | none => env
+      | some lhs =>
+        let o := rhs.eval env
+        let env' := envUpdate env (lhs.mapInput Empty.elim) o
+        env'
+
+@[simp]
+theorem Stmt.execute_go_assign_eq
+    [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+    {p : Nat}
+    (env : (Var ι ε ω) → (ZMod p))
+    (var : Var Empty ε ω)
+    (rhs : WitnessExpr (Var ι ε ω) p) :
+    Stmt.execute_go env (Stmt.assign var rhs) =
+    envUpdate env (var.mapInput Empty.elim) (rhs.eval env) := by
+  rfl
+
+@[simp]
+theorem Stmt.exevute_go_constraint_none_eq
+    [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+    {p : Nat}
+    (env : (Var ι ε ω) → (ZMod p))
+    (rhs : PolyExpr (Var ι ε ω) p) :
+    Stmt.execute_go env (Stmt.constraint none rhs) = env := by
+  rfl
+
+@[simp]
+theorem Stmt.execute_go_constraint_some_eq
+    [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+    {p : Nat}
+    (env : (Var ι ε ω) → (ZMod p))
+    (var : Var Empty ε ω)
+    (rhs : PolyExpr (Var ι ε ω) p) :
+    Stmt.execute_go env (Stmt.constraint (some var) rhs) =
+    envUpdate env (var.mapInput Empty.elim) (rhs.eval env) := by
+  rfl
 
 /-- Run the witness generation semantics of the program. -/
-noncomputable def Program.toWitness_go
+noncomputable def Program.execute_go
     [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
     (env : (Var ι ε ω) → (ZMod p))
-    (prog : Program ι ε ω p) :
+    (stmts : List (Stmt ι ε ω p)) :
     (Var ι ε ω) → (ZMod p) :=
-    prog.stmts.foldl (init := env)
-      (fun env stmt =>
-        match stmt with
-        | Stmt.assign var rhs =>
-          let o := rhs.eval env
-          -- env' := env [var := o]
-          let env' := (fun vnew => if vnew = (var.mapInput Empty.elim) then o else env vnew)
-          env'
-        | Stmt.constraint lhs? rhs =>
-          match lhs? with
-          | none => env
-          | some lhs =>
-            let o := rhs.eval env
-            let env' := (fun vnew => if vnew = (lhs.mapInput Empty.elim) then o else env vnew)
-            env')
+      stmts.foldl (init := env) (fun env stmt => Stmt.execute_go env stmt)
 
-noncomputable def Program.toWitness
+@[simp]
+theorem Program.execute_go_nil_eq
+    [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+    (env : (Var ι ε ω) → (ZMod p)) :
+    Program.execute_go env ([] : List (Stmt ι ε ω p)) = env := by
+  rfl
+
+@[simp]
+theorem Program.execute_go_cons_eq
+    [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+    (env : (Var ι ε ω) → (ZMod p))
+    (s : Stmt ι ε ω p) (ss : List (Stmt ι ε ω p)) :
+    Program.execute_go env (s :: ss) = Program.execute_go (Stmt.execute_go env s) ss := by
+  rfl
+
+
+@[simp]
+noncomputable def Program.execute
     [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
     (envIn : ι → (ZMod p))
     (prog : Program ι ε ω p) :
     (ω → (ZMod p)) :=
-  let env' := prog.toWitness_go fun var =>
+  let env' := Program.execute_go (fun var =>
     match var with
     | Var.input i => envIn i
-    | _ => 0
+    | _ => 0) prog.stmts
   fun o => env' (Var.output o)
 
 structure Program.WellFormed
@@ -335,7 +462,7 @@ structure Program.WellFormed
         match var with
         | Var.input i => envIn i
         | Var.existential e => envExists e
-        | Var.output o => program.toWitness envIn o
+        | Var.output o => program.execute envIn o
 
   hsound :
     ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p),
@@ -344,7 +471,7 @@ structure Program.WellFormed
         | Var.input i => envIn i
         | Var.existential e => envExists e
         | Var.output o => envOut o)) →
-      (envOut = program.toWitness envIn)
+      (envOut = program.execute envIn)
 
 namespace IsZeroCircuit
 
@@ -356,7 +483,8 @@ notation var "<<=" e => Stmt.constraint (some var) e
 notation var "<<-" e => Stmt.assign var e
 notation e1 "===" e2 => Stmt.constraint none (e1 - e2)
 
-variable (p : Nat) (hp : Nat.Prime p)
+variable (p : Nat) [Fact p.Prime]
+
 def program : Program (Fin 1) (Fin 1) (Fin 1) p :=
   { stmts := [
     inv(0) <<- .field (.var in(0))⁻¹,
@@ -364,9 +492,28 @@ def program : Program (Fin 1) (Fin 1) (Fin 1) p :=
     (((.var (in(0))) * (.var (out(0))))) === 0
     ]}
 
+#synth Field (ZMod 3)
 theorem program_WellFormed : (program p).WellFormed := by
   constructor
-  · sorry
+  · intros envIn
+    let envExists : Fin 1 → ZMod p := fun _ => (envIn 0)⁻¹
+    exists envExists
+    simp only [Program.toConstraintSystem, program, Fin.isValue,
+      Program.toConstraintSystem_go_cons_eq, Program.toConstraintSystem_constraint_cons_eq,
+      Var.mapInput, Var.map, id_eq, PolyExpr.toPolynomial_sub,
+      Program.toConstraintSystem_constraint_none_cons_eq, Program.toConstraintSystem_go_nil_eq,
+      Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
+      Stmt.execute_go_constraint_some_eq, Stmt.exevute_go_constraint_none_eq,
+      Program.execute_go_nil_eq]
+    simp only [ConstraintSystem.IsSat, Fin.isValue, List.mem_cons, List.not_mem_nil, or_false,
+      forall_eq_or_imp, map_sub, forall_eq]
+    constructor
+    · simp [PolyExpr.toPolynomial, envUpdate]
+      simp [envExists]
+    · simp [PolyExpr.toPolynomial, envUpdate]
+      by_cases h : envIn 0 = 0
+      · simp [h]
+      · simp [h]
   · sorry
 
 end IsZeroCircuit
