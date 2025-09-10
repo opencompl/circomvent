@@ -181,12 +181,12 @@ noncomputable def ToplevelExpr.eval
 -/
 inductive Stmt (ι ε ω : Type) (p : Nat)
 | assign (v : Var Empty ε ω) (e : ToplevelExpr (Var ι ε ω) p)
-| constraint (c : PolyExpr (Var ι ε ω) p)
+| constraint (lhs? : Option (Var Empty ε ω)) (c : PolyExpr (Var ι ε ω) p) 
 
 noncomputable def Stmt.toConstraint
     (s : Stmt ι ε ω p) : Option (Constraint (Var ι ε ω) p) :=
   match s with
-  | Stmt.constraint c => some c.toPolynomial
+  | Stmt.constraint _lhs c => some c.toPolynomial
   | Stmt.assign .. => none
 
 /-- ## Circom Programs. -/
@@ -217,7 +217,13 @@ noncomputable def Program.toWitness_go
           -- env' := env [var := o]
           let env' := (fun vnew => if vnew = (var.mapInput Empty.elim) then o else env vnew)
           env'
-        | Stmt.constraint .. => env)
+        | Stmt.constraint lhs? rhs => 
+          match lhs? with
+          | none => env
+          | some lhs =>
+            let o := rhs.eval env
+            let env' := (fun vnew => if vnew = (lhs.mapInput Empty.elim) then o else env vnew)
+            env')
 
 noncomputable def Program.toWitness
     [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
