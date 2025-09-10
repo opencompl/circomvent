@@ -182,7 +182,7 @@ theorem eval_sub {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) :
     (e1 - e2).eval = fun env => (e1.eval env) - (e2.eval env) := by
   ext a
-  simp [sub, eval]
+  simp [eval]
   ring
 
 @[simp]
@@ -190,7 +190,7 @@ theorem toPolynomial_sub {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) :
     (e1 - e2).toPolynomial = (e1.toPolynomial) - (e2.toPolynomial) := by
   ext
-  simp [sub, toPolynomial]
+  simp [toPolynomial]
   ring
 
 end PolyExpr
@@ -399,7 +399,7 @@ theorem Stmt.execute_go_assign_eq
   rfl
 
 @[simp]
-theorem Stmt.exevute_go_constraint_none_eq
+theorem Stmt.execute_go_constraint_none_eq
     [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
     {p : Nat}
     (env : (Var ι ε ω) → (ZMod p))
@@ -454,28 +454,24 @@ noncomputable def Program.execute
     | _ => 0) prog.stmts
   fun o => env' (Var.output o)
 
+def Env (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p)
+  := fun var => match var with
+      | Var.input i => envIn i
+      | Var.existential e => envExists e
+      | Var.output o => envOut o
+
 structure Program.WellFormed
   [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
   (program : Program ι ε ω p) : Prop where
   hcomplete : ∀ (envIn : ι → ZMod p), ∃ (envExists : ε → ZMod p),
-      (Program.toConstraintSystem program).IsSat fun var =>
-        match var with
-        | Var.input i => envIn i
-        | Var.existential e => envExists e
-        | Var.output o => program.execute envIn o
-
+      (Program.toConstraintSystem program).IsSat (Env envIn envExists (program.execute envIn))
   hsound :
     ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p),
-      (hModel : (Program.toConstraintSystem program).IsSat (fun var =>
-        match var with
-        | Var.input i => envIn i
-        | Var.existential e => envExists e
-        | Var.output o => envOut o)) →
+      (Program.toConstraintSystem program).IsSat (Env envIn envExists envOut) →
       (envOut = program.execute envIn)
 
 namespace IsZeroCircuit
 
-infix : 20 " e≠ " => BoolExpr.ne
 notation "in(" i ")" => Var.input i
 notation "out(" o ")" => Var.output o
 notation "inv(" e ")" => Var.existential e
@@ -489,10 +485,9 @@ def program : Program (Fin 1) (Fin 1) (Fin 1) p :=
   { stmts := [
     inv(0) <<- .field (.var in(0))⁻¹,
     (out(0)) <<= -(.var (in(0))) * (.var (inv(0))) + 1,
-    (((.var (in(0))) * (.var (out(0))))) === 0
+    (((.var (in(0))) * (.var (out(0))))) === 0,
     ]}
 
-#synth Field (ZMod 3)
 theorem program_WellFormed : (program p).WellFormed := by
   constructor
   · intros envIn
@@ -503,25 +498,25 @@ theorem program_WellFormed : (program p).WellFormed := by
       Var.mapInput, Var.map, id_eq, PolyExpr.toPolynomial_sub,
       Program.toConstraintSystem_constraint_none_cons_eq, Program.toConstraintSystem_go_nil_eq,
       Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
-      Stmt.execute_go_constraint_some_eq, Stmt.exevute_go_constraint_none_eq,
+      Stmt.execute_go_constraint_some_eq, Stmt.execute_go_constraint_none_eq,
       Program.execute_go_nil_eq]
     simp only [ConstraintSystem.IsSat, Fin.isValue, List.mem_cons, List.not_mem_nil, or_false,
       forall_eq_or_imp, map_sub, forall_eq]
     constructor
-    · simp [PolyExpr.toPolynomial, envUpdate]
+    · simp [PolyExpr.toPolynomial, Env, envUpdate]
       simp [envExists]
-    · simp [PolyExpr.toPolynomial, envUpdate]
+    · simp [PolyExpr.toPolynomial, Env, envUpdate]
       by_cases h : envIn 0 = 0
       · simp [h]
       · simp [h]
   · intros envIn envExists envOut
     simp [Program.toConstraintSystem, program, ConstraintSystem.IsSat,
-      PolyExpr.toPolynomial, envUpdate,
+      PolyExpr.toPolynomial, Env, envUpdate,
       Program.toConstraintSystem_go_cons_eq, Program.toConstraintSystem_constraint_cons_eq,
-      Var.mapInput, Var.map, id_eq, PolyExpr.toPolynomial_sub,
+      Var.mapInput, Var.map, id_eq,
       Program.toConstraintSystem_constraint_none_cons_eq, Program.toConstraintSystem_go_nil_eq,
       Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
-      Stmt.execute_go_constraint_some_eq, Stmt.exevute_go_constraint_none_eq,
+      Stmt.execute_go_constraint_some_eq, Stmt.execute_go_constraint_none_eq,
       Program.execute_go_nil_eq]
     intros hrel hval
     rcases hval with hval | hval
