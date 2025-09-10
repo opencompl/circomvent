@@ -72,7 +72,7 @@ abbrev ConstraintSystem (α : Type) (p : Nat) :=
    List (Constraint α p)
 
 /-- Check that `c ⊧ env` -/
-def ConstraintSystem.IsModel {α : Type} {p : Nat}
+def ConstraintSystem.IsSat {α : Type} {p : Nat}
    (cs : ConstraintSystem α p)
    /- env assigns values to each variable. -/
    (env : α → ZMod p) : Prop :=
@@ -113,10 +113,17 @@ noncomputable def toPolynomial : PolyExpr α p → MvPolynomial α (ZMod p)
 | mul e1 e2 => toPolynomial e1 * toPolynomial e2
 
 /-- Evaluate a `PolyExpr` in an environment `env : α → ZMod p`. -/
-noncomputable def eval
-    (env : α → ZMod p)
-    (e : PolyExpr α p) : ZMod p :=
+noncomputable def aeval (e : PolyExpr α p) 
+    (env : α → ZMod p) : ZMod p :=
     (e.toPolynomial).aeval env
+
+/-- Evaluate a `PolyExpr` in an environment `env : α → ZMod p`. -/
+def eval (e : PolyExpr α p) (env : α → ZMod p) : ZMod p :=
+  match e with
+  | PolyExpr.const c => c
+  | PolyExpr.var v => env v
+  | PolyExpr.add e1 e2 => e1.eval env + e2.eval env
+  | PolyExpr.mul e1 e2 => e1.eval env * e2.eval env
 end PolyExpr
 
 /-- ## Syntax of Boolean expressions.
@@ -126,6 +133,7 @@ end PolyExpr
 -/
 inductive BoolExpr (α : Type) (p : Nat) : Type
 | eq (e1 e2 : PolyExpr α p)
+| bnot (b : BoolExpr α p)
 deriving DecidableEq, Inhabited, Repr
 
 noncomputable def BoolExpr.eval
@@ -133,6 +141,19 @@ noncomputable def BoolExpr.eval
     (b : BoolExpr α p) : Bool :=
   match b with
   | BoolExpr.eq e1 e2 => e1.eval env = e2.eval env
+  | BoolExpr.bnot b => not (b.eval env)
+
+/-- Define not-equals in terms of equals and not. -/
+def BoolExpr.ne {α : Type} {p : Nat}
+    (e1 e2 : PolyExpr α p) : BoolExpr α p :=
+  BoolExpr.bnot (BoolExpr.eq e1 e2)
+
+@[simp]
+theorem BoolExpr.eval_ne {α : Type} {p : Nat}
+    (e1 e2 : PolyExpr α p) :
+    (BoolExpr.ne e1 e2).eval = fun env => (e1.eval env ≠ e2.eval env) := by
+  ext a
+  simp [BoolExpr.ne, BoolExpr.eval]
 
 /-- ## Syntax of top-level expressions.
 
@@ -212,19 +233,16 @@ noncomputable def Program.toWitness
 structure Program.WellFormed
   [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
   (program : Program ι ε ω p) : Prop where
-  hcomplete : ∀
-    (envIn : ι → ZMod p) {envOut : ω → ZMod p},
-    (hout : envOut = program.toWitness envIn) →
-    ∃ (envExists : ε → ZMod p),
-      (Program.toConstraintSystem program).IsModel fun var =>
+  hcomplete : ∀ (envIn : ι → ZMod p), ∃ (envExists : ε → ZMod p),
+      (Program.toConstraintSystem program).IsSat fun var =>
         match var with
         | Var.input i => envIn i
         | Var.existential e => envExists e
-        | Var.output o => envOut o
+        | Var.output o => program.toWitness envIn o
 
   hsound :
     ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p),
-      (hModel : (Program.toConstraintSystem program).IsModel (fun var =>
+      (hModel : (Program.toConstraintSystem program).IsSat (fun var =>
         match var with
         | Var.input i => envIn i
         | Var.existential e => envExists e
