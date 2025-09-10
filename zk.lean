@@ -514,7 +514,47 @@ theorem program_WellFormed : (program p).WellFormed := by
       by_cases h : envIn 0 = 0
       · simp [h]
       · simp [h]
-  · sorry
+  · intros envIn envExists envOut
+    simp [Program.toConstraintSystem, program, ConstraintSystem.IsSat,
+      PolyExpr.toPolynomial, envUpdate,
+      Program.toConstraintSystem_go_cons_eq, Program.toConstraintSystem_constraint_cons_eq,
+      Var.mapInput, Var.map, id_eq, PolyExpr.toPolynomial_sub,
+      Program.toConstraintSystem_constraint_none_cons_eq, Program.toConstraintSystem_go_nil_eq,
+      Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
+      Stmt.execute_go_constraint_some_eq, Stmt.exevute_go_constraint_none_eq,
+      Program.execute_go_nil_eq]
+    intros hrel hval
+    rcases hval with hval | hval
+    · simp [hval] at hrel ⊢
+      ext i
+      have : i = 0 := by omega
+      subst this
+      simp
+      -- | Beyond this point, we should have proof automation for fields.
+      -- · fact1 ∧ fact2 ∧ ... ∧ factn => goal
+      -- · goal ∈ I(fact1, fact2, ..., factn)
+      -- Grind should solve this, as it can solve the horn fragment of commring + characteristic facts,
+      -- but it times out.
+      rw [add_neg_eq_zero] at hrel
+      simp [hrel]
+    · ext i
+      have : i = 0 := by omega
+      subst this
+      simp [hval] at hrel ⊢
+      by_cases hx : envIn 0 = 0
+      · simp [hx] at hrel ⊢
+      -- | Beyond this point, we should have proof automation for fields.
+      -- Grind should solve this, as it can solve the horn fragment of commring + characteristic facts,
+      -- but it times out.
+      · have : (envIn 0) * (envIn 0)⁻¹ = 1 := by
+          apply Field.mul_inv_cancel
+          simp [hx]
+        rw [this]
+        ring
+/--
+info: 'Circomvent.IsZeroCircuit.program_WellFormed' depends on axioms: [propext, Classical.choice, Quot.sound]
+-/
+#guard_msgs in #print axioms program_WellFormed
 
 end IsZeroCircuit
 
