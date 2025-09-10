@@ -1,3 +1,4 @@
+-- https://github.com/Veridise/llzk-lib/blob/5680d910854e71b1b92b02e4f69271c4345caedf/test/FrontendLang/Circom/circomlib.llzk
 import Mathlib.RingTheory.Polynomial.Quotient
 import Mathlib.RingTheory.Ideal.Defs
 import Mathlib.RingTheory.Ideal.Basic
@@ -8,19 +9,49 @@ import Mathlib.Algebra.Polynomial.RingDivision
 import Mathlib.Data.Finset.Sort
 import Mathlib.Data.List.ToFinsupp
 import Mathlib.Data.List.Basic
--- Grind
 import CompPoly.CMvPolynomial
 
+/-# Example IsZero Program
+
+```c
+// Constraint := MvPolynomial (Var (Fin 1) (Fin 1) (Fin 1)) (ZMod p)
+// ConstraintSystem := List (MvPolynomial (Var (Fin 1) (Fin 1) (Fin 1)) (ZMod p))
+template IsZero() {
+    signal input in; -- one input ~= Fin 1
+    signal output out; -- one output ~= Fin 1
+
+    signal inv; -- existential ~= Fin 1
+
+    inv <-- in!=0 ? 1/in : 0; // for now, consider this full line the semantics of `felt.inv`
+
+    out <== -in*inv +1;
+    in*out === 0;
+}
+```
+-/
+
+/-# Exercises for the reader
+
+- Switch to `CompPoly.CMvPolynomial`, which has already been imported.
+  The proofs will need to change; They will use the `RingEquiv` between a 
+  `CompPoly.CMvPolynomial` and a `MvPolynomial`.
+  Since `MPolynomial` contains all the reasoning principles,
+  our proofs about `CompPoly.CMvPolynomial` will need to use the `RingEquiv` to
+  convert to an `MvPolynomial`, do the reasoning there, and convert back.
+
+-/
+
+namespace Circomvent
 
 open CPoly
-
 open Polynomial
 
-inductive Var (ι ε ω : Type) 
+inductive Var (ι ε ω : Type)
 | input (i : ι)
 | output (o : ω)
 | existential (e : ε)
 deriving DecidableEq, Inhabited, Repr, BEq, Hashable
+
 
 /-- Map the variables in a Var to another Var. -/
 def Var.map (f : ι₁ → ι₂) (g : ε₁ → ε₂) (h : ω₁ → ω₂) :
@@ -34,71 +65,100 @@ def Var.mapInput (f : ι₁ → ι₂) : Var ι₁ ε ω → Var ι₂ ε ω :=
 
 /-- A constraint is a multivariate polynomial
 over the variables in the Var with coefficients in ZMod p -/
-abbrev Constraint (α : Type) (p : Nat) := 
+abbrev Constraint (α : Type) (p : Nat) :=
   MvPolynomial α (ZMod p)
 
-abbrev ConstraintSystem (α : Type) (p : Nat) := 
+abbrev ConstraintSystem (α : Type) (p : Nat) :=
    List (Constraint α p)
 
 /-- Check that `c ⊧ env` -/
-def ConstraintSystem.IsModel {α : Type} {p : Nat} 
-   (cs : ConstraintSystem α p) 
+def ConstraintSystem.IsModel {α : Type} {p : Nat}
+   (cs : ConstraintSystem α p)
+   /- env assigns values to each variable. -/
    (env : α → ZMod p) : Prop :=
    ∀ poly ∈ cs, poly.aeval env = 0
 
-inductive PolyExpr (α: Type) (p : Nat) : Type
-| const (c : ZMod p)
+/-- Minimal embedding of Circom syntax.
+Can eventually be moved to the `lean-mlir` syntax embedding.
+-/
+inductive PolyExpr (α : Type) (p : Nat) : Type
+| const (c : ZMod p) -- TODO: do we want to have this be `Z`, and choose `p` later?
 | var (v : α)
 | add (e1 e2 : PolyExpr α p)
 | mul (e1 e2 : PolyExpr α p)
 deriving DecidableEq, Inhabited, Repr
 
+
+/-- Coerce variables in `α` into a `PolyExpr`.
+
+-- "x" = 0 : Fin 1
+-- (add (PolyExpr.var 0) (PolyExpr.var 1) : PolyExpr (Fin 2) p)
+-- (add 0 1) : PolyExpr (Fin 2) p
+-/
 instance : Coe α (PolyExpr α p) where
   coe v := PolyExpr.var v
 
 namespace PolyExpr
+
 variable {α : Type} {p : Nat}
 
-@[simp]
-theorem coe_var (v : α) : (v : PolyExpr α p) = PolyExpr.var v := rfl
+/-- The coercion is well-formed, and injects values `v : α` as a `PolyExpr.var`. -/
+@[simp] theorem coe_var (v : α) : (↑ v : PolyExpr α p) = PolyExpr.var v := rfl
 
+/-- Denotation from syntax to semantics. -/
 noncomputable def toPolynomial : PolyExpr α p → MvPolynomial α (ZMod p)
 | const c => MvPolynomial.C c
 | var v => MvPolynomial.X v
 | add e1 e2 => toPolynomial e1 + toPolynomial e2
 | mul e1 e2 => toPolynomial e1 * toPolynomial e2
-end PolyExpr
 
-noncomputable def PolyExpr.eval 
-    (env : α → ZMod p) 
+/-- Evaluate a `PolyExpr` in an environment `env : α → ZMod p`. -/
+noncomputable def eval
+    (env : α → ZMod p)
     (e : PolyExpr α p) : ZMod p :=
     (e.toPolynomial).aeval env
+end PolyExpr
 
+/-- ## Syntax of Boolean expressions.
+
+# Exercise to the reader:
+- extend to <=, <, not equals, and so on.
+-/
 inductive BoolExpr (α : Type) (p : Nat) : Type
 | eq (e1 e2 : PolyExpr α p)
 deriving DecidableEq, Inhabited, Repr
 
-noncomputable def BoolExpr.eval 
-    (env : α → ZMod p) 
+noncomputable def BoolExpr.eval
+    (env : α → ZMod p)
     (b : BoolExpr α p) : Bool :=
-  match b with 
+  match b with
   | BoolExpr.eq e1 e2 => e1.eval env = e2.eval env
 
+/-- ## Syntax of top-level expressions.
+
+These are either polynomials,
+or a top-level ternary select `cond ? etrue : efalse`.
+-/
 inductive ToplevelExpr (α: Type) (p : Nat) : Type
 | poly : PolyExpr α p → ToplevelExpr α p
 | select (cond : BoolExpr α p) (thenBranch elseBranch : PolyExpr α p)
 
 noncomputable def ToplevelExpr.eval
-    (env : α → ZMod p) 
+    (env : α → ZMod p)
     (t : ToplevelExpr α p) : ZMod p :=
   match t with
   | ToplevelExpr.poly e => e.eval env
   | ToplevelExpr.select cond thenBranch elseBranch =>
       if cond.eval env then thenBranch.eval env else elseBranch.eval env
 
-inductive Stmt (ι ε ω : Type) (p : Nat) 
--- | this a bit annoying, as we cannot have 'isConstaint', as it will
--- need a proof that the ToplevelExpr is a real polynomial.
+/-## Statement expressions.
+
+## Exercise for the reader:
+
+- Add a `lhs? : Option Var` to `Constraint`,
+  which will treat the constraint also as an assignment to the variable `Var`.
+-/
+inductive Stmt (ι ε ω : Type) (p : Nat)
 | assign (v : Var Empty ε ω) (e : ToplevelExpr (Var ι ε ω) p)
 | constraint (c : PolyExpr (Var ι ε ω) p)
 
@@ -108,84 +168,72 @@ noncomputable def Stmt.toConstraint
   | Stmt.constraint c => some c.toPolynomial
   | Stmt.assign .. => none
 
+/-- ## Circom Programs. -/
 structure Program (ι ε ω : Type) (p : Nat) where
    stmts : List (Stmt ι ε ω p)
 
-/-- Create a constraint system from 'Program'. -/
-noncomputable def Program.toConstraintSystem (prog : Program ι ε ω p) : 
-   ConstraintSystem (Var ι ε ω) p := 
+/-- Create a constraint system from 'Program',
+by converting each `Stmt.constraint` into a `Constraint`. -/
+noncomputable def Program.toConstraintSystem (prog : Program ι ε ω p) :
+   ConstraintSystem (Var ι ε ω) p :=
     prog.stmts.foldl (init := [])
-      (fun acc stmt => 
+      (fun acc stmt =>
         match stmt.toConstraint with
         | .some c => c :: acc
         | none => acc)
 
 /-- Run the witness generation semantics of the program. -/
-noncomputable def Program.toWitness
+noncomputable def Program.toWitness_go
     [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
-    (env : (Var ι ε ω) → (ZMod p)) 
-    (prog : Program ι ε ω p) : 
+    (env : (Var ι ε ω) → (ZMod p))
+    (prog : Program ι ε ω p) :
     (Var ι ε ω) → (ZMod p) :=
     prog.stmts.foldl (init := env)
-      (fun env stmt => 
+      (fun env stmt =>
         match stmt with
         | Stmt.assign var rhs =>
           let o := rhs.eval env
-          (fun vnew => if vnew = (var.mapInput Empty.elim) then o else env vnew)
+          -- env' := env [var := o]
+          let env' := (fun vnew => if vnew = (var.mapInput Empty.elim) then o else env vnew)
+          env'
         | Stmt.constraint .. => env)
 
-structure Program.WellFormed 
+noncomputable def Program.toWitness
+    [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+    (envIn : ι → (ZMod p))
+    (prog : Program ι ε ω p) :
+    (ω → (ZMod p)) :=
+  let env' := prog.toWitness_go fun var =>
+    match var with 
+    | Var.input i => envIn i
+    | _ => 0
+  fun o => env' (Var.output o)
+
+structure Program.WellFormed
   [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
   (program : Program ι ε ω p) : Prop where
-  hsound : ∀
-    (envIn : ι → ZMod p) {envOut : (Var ι ε ω) → ZMod p}, 
-    (hout : envOut = 
-      program.toWitness fun var =>
-        match var with
-        | Var.input i => envIn i
-        | _ => 0) →
+  hcomplete : ∀
+    (envIn : ι → ZMod p) {envOut : ω → ZMod p},
+    (hout : envOut = program.toWitness envIn) →
     ∃ (envExists : ε → ZMod p),
       (Program.toConstraintSystem program).IsModel fun var =>
         match var with
         | Var.input i => envIn i
         | Var.existential e => envExists e
-        | Var.output o => envOut (Var.output o)
+        | Var.output o => envOut o
 
-  hcomplete :
-    ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p), 
+  hsound :
+    ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p),
       (hModel : (Program.toConstraintSystem program).IsModel (fun var =>
         match var with
         | Var.input i => envIn i
         | Var.existential e => envExists e
         | Var.output o => envOut o)) →
-      (henvOut : env' = program.toWitness fun var =>
-        match var with
-        | Var.input i => envIn i
-        | Var.existential e => envExists e
-        | Var.output o => envOut o) →
-      (∀ o : ω, envOut o = env' (Var.output o))
-      -- (∀ e : ε, envExists e = env' (Var.existential e))
+      (envOut = program.toWitness envIn)
+
 -- 1. define computable MvPolynomial from Nethermind.
--- 2. define 'Program.WellFormed' : witness (x) = y <-> 
+-- 2. define 'Program.WellFormed' : witness (x) = y <->
 --    (∃ σ, constraintsystem x σ y)
 -- 3. Define 'isZero' program.
 -- 4. Prove that 'isZero.WellFormed'.
-
--- inv <--
--- out <== 
-
-namespace ZK 
-
-structure ConstraintSystem (σ : Type) (p : Nat) where
-  polys : List <| MvPolynomial σ (ZMod p)
-
-namespace ConstraintSystem
-variable {σ : Type} {p : Nat} (c : ConstraintSystem σ p)
-
-
-def Sat (cs : ConstraintSystem σ p) (assign : σ → ZMod p) : Prop :=
-    ∀ poly ∈ cs.polys, poly.aeval assign = 0
-end ConstraintSystem
-
-end ZK
-
+end Circomvent
