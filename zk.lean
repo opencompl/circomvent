@@ -572,7 +572,7 @@ def program_det : Program (Fin 1) (Fin 1) (Fin 1) p :=
     (((.var (out(0))) * (.var (inv(0))))) === 0,
     ]}
 
-theorem program_Deterministic : (program_det p).Determinstic := by
+theorem program_det_Deterministic : (program_det p).Determinstic := by
   constructor
   · intros envIn envExists envExists' envOut
     simp [program_det, ConstraintSystem.IsSat, PolyExpr.toPolynomial, Env]
@@ -595,6 +595,23 @@ theorem program_Deterministic : (program_det p).Determinstic := by
       ext i
       have i0 : i = 0 := by omega
       simp [i0, heq]
+
+-- A direct, and application-specific definition of soundness.
+theorem program_IsZero_Semantics :
+  ∀ (envIn : (Fin 1) → ZMod p) (envExists : (Fin 1) → ZMod p) (envOut : (Fin 1) → ZMod p),
+  (program p).toConstraintSystem.IsSat (Env envIn envExists envOut) →
+  (envIn 0 = 0 ↔ envOut 0 = 1)
+  := by
+    intros envIn envExists envOut
+    simp [program, ConstraintSystem.IsSat, PolyExpr.toPolynomial, Env]
+    intros h1 h2
+    by_cases hx : envIn 0 = 0
+    · simp [hx] at h1 ⊢
+      rw [add_neg_eq_zero] at h1
+      simp [h1]
+    · simp [hx] at h2 ⊢
+      simp [h2]
+
 
 end IsZeroCircuit
 
