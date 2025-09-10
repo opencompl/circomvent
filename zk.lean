@@ -470,6 +470,17 @@ structure Program.WellFormed
       (Program.toConstraintSystem program).IsSat (Env envIn envExists envOut) →
       (envOut = program.execute envIn)
 
+-- A program is "determinstic" if for exists at most one witness for any given (input, output) pair
+-- This property is sometimes useful to show, in particular when it is difficult to show soundness wrt
+-- a particular determinstic witness calculator.
+structure Program.Determinstic
+  [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+  (program : Program ι ε ω p) : Prop where
+  hdeterministic : ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envExists' : ε → ZMod p) (envOut : ω → ZMod p),
+    (Program.toConstraintSystem program).IsSat (Env envIn envExists envOut)
+    ∧ (Program.toConstraintSystem program).IsSat (Env envIn envExists' envOut)
+    → envExists = envExists'
+
 namespace IsZeroCircuit
 
 notation "in(" i ")" => Var.input i
@@ -550,6 +561,40 @@ theorem program_WellFormed : (program p).WellFormed := by
 info: 'Circomvent.IsZeroCircuit.program_WellFormed' depends on axioms: [propext, Classical.choice, Quot.sound]
 -/
 #guard_msgs in #print axioms program_WellFormed
+
+-- The IsZero program above is not Determinstic, since when in = 0, inv can be anything.
+-- This is a variation that is determinstic.
+def program_det : Program (Fin 1) (Fin 1) (Fin 1) p :=
+  { stmts := [
+    inv(0) <<- .field (.var in(0))⁻¹,
+    (out(0)) <<= -(.var (in(0))) * (.var (inv(0))) + 1,
+    (((.var (in(0))) * (.var (out(0))))) === 0,
+    (((.var (out(0))) * (.var (inv(0))))) === 0,
+    ]}
+
+theorem program_Deterministic : (program_det p).Determinstic := by
+  constructor
+  · intros envIn envExists envExists' envOut
+    simp [program_det, ConstraintSystem.IsSat, PolyExpr.toPolynomial, Env]
+    intros h1 _ h3 h1' _ h3'
+    have heq := h1
+    rw [←h1'] at heq
+    simp at heq
+    by_cases hx : envIn 0 = 0
+    · have hOutNe0 : ¬(envOut 0 = 0) := by
+        simp [hx] at h1
+        rw [add_neg_eq_zero] at h1
+        rw [←h1]
+        norm_num
+      simp [hOutNe0] at h3 h3' ⊢
+      rw [←h3'] at h3
+      ext i
+      have i0 : i = 0 := by omega
+      simp [i0, h3]
+    · simp [hx] at heq
+      ext i
+      have i0 : i = 0 := by omega
+      simp [i0, heq]
 
 end IsZeroCircuit
 
