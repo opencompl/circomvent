@@ -182,7 +182,7 @@ theorem eval_sub {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) :
     (e1 - e2).eval = fun env => (e1.eval env) - (e2.eval env) := by
   ext a
-  simp [sub, eval]
+  simp [eval]
   ring
 
 @[simp]
@@ -190,7 +190,7 @@ theorem toPolynomial_sub {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) :
     (e1 - e2).toPolynomial = (e1.toPolynomial) - (e2.toPolynomial) := by
   ext
-  simp [sub, toPolynomial]
+  simp [toPolynomial]
   ring
 
 end PolyExpr
@@ -518,7 +518,7 @@ theorem program_WellFormed : (program p).WellFormed := by
     simp [Program.toConstraintSystem, program, ConstraintSystem.IsSat,
       PolyExpr.toPolynomial, envUpdate,
       Program.toConstraintSystem_go_cons_eq, Program.toConstraintSystem_constraint_cons_eq,
-      Var.mapInput, Var.map, id_eq, PolyExpr.toPolynomial_sub,
+      Var.mapInput, Var.map, id_eq,
       Program.toConstraintSystem_constraint_none_cons_eq, Program.toConstraintSystem_go_nil_eq,
       Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
       Stmt.execute_go_constraint_some_eq, Stmt.exevute_go_constraint_none_eq,
