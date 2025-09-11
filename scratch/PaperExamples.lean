@@ -32,6 +32,11 @@ instance : TyDenote Ty where
     | .int => BitVec 32
     | .felt => ZMod BabyBear
 
+instance (a : Ty) : Repr ⟦a⟧ :=
+  match a with
+  | .felt => ZMod.repr BabyBear
+  | .int => BitVec.instRepr
+
 inductive Op : Type
   | add : Op
   | addFelt : Op
@@ -150,11 +155,6 @@ def eg₀ : Com Simple (Ctxt.ofList []) .pure [.int] :=
   }]
 
 def eg₀val := Com.denote eg₀ Ctxt.Valuation.nil
-
-instance (a : Ty) : Repr ⟦a⟧ :=
-  match a with
-  | .felt => by simp [toType]; infer_instance
-  | .int => by simp [toType]; infer_instance
 
 /-- info: [0x00000008#32] -/
 #guard_msgs in #eval eg₀val
