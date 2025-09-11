@@ -32,16 +32,19 @@ instance : TyDenote Ty where
     | .int => BitVec 32
     | .felt => ZMod BabyBear
 
-instance (a : Ty) : Repr ⟦a⟧ :=
-  match a with
-  | .felt => ZMod.repr BabyBear
-  | .int => BitVec.instRepr
+deriving instance Lean.ToExpr for (ZMod BabyBear)
 
 inductive Op : Type
   | add : Op
   | addFelt : Op
   | const : (val : ℤ) → Op
+  | constFelt : (val : ℤ) → Op
   deriving DecidableEq, Repr, Lean.ToExpr
+
+instance (a : Ty) : Repr ⟦a⟧ :=
+  match a with
+  | .int => by simp [toType]; infer_instance
+  | .felt => by simp [toType]; infer_instance
 
 /-- `Simple` is a very basic example dialect -/
 abbrev Simple : Dialect where
@@ -59,15 +62,25 @@ def_signature for Simple
   | .add      => (.int, .int) → .int
   | .addFelt  => (.felt, .felt) → .felt
   | .const _  => () → .int
+  | .constFelt _  => () → .felt
 
 def_denote for Simple
-  | .const n => BitVec.ofInt 32 n ::ₕ .nil
   | .add     => fun a b => a + b ::ₕ .nil
   | .addFelt => fun a b => a + b ::ₕ .nil
+  | .const n => BitVec.ofInt 32 n ::ₕ .nil
+  | .constFelt n => (n : ZMod BabyBear) ::ₕ .nil
 
 def cst {Γ : Ctxt _} (n : ℤ) : Expr Simple Γ .pure [.int]  :=
   Expr.mk
     (op := .const n)
+    (eff_le := by constructor)
+    (ty_eq := rfl)
+    (args := .nil)
+    (regArgs := .nil)
+
+def cstFelt {Γ : Ctxt _} (n : ℤ) : Expr Simple Γ .pure [.felt]  :=
+  Expr.mk
+    (op := .constFelt n)
     (eff_le := by constructor)
     (ty_eq := rfl)
     (args := .nil)
@@ -96,6 +109,7 @@ namespace MLIR2Simple
 def mkTy : MLIR.AST.MLIRType φ → MLIR.AST.ExceptM Simple Ty
   | MLIR.AST.MLIRType.int MLIR.AST.Signedness.Signless _ => do
     return .int
+  | MLIR.AST.MLIRType.undefined "felt.type" => return .felt
   | _ => throw .unsupportedType
 
 instance instTransformTy : MLIR.AST.TransformTy Simple 0 where
@@ -108,6 +122,12 @@ def mkExpr (Γ : Ctxt _) (opStx : MLIR.AST.Op 0) :
     match opStx.attrs.find_int "value" with
     | .some (v, _ty) => return ⟨.pure, [.int], cst v⟩
     | .none => throw <| .generic s!"expected 'const' to have int attr 'value', found: {repr opStx}"
+  | "felt.const" =>
+    match opStx.attrs.find_int "value" with
+    | .some (v, _ty) => return ⟨.pure, [.felt], cstFelt v⟩
+    | .none => throw <| .generic s!"expected 'const' to have int attr 'value', found: {repr opStx}"
+  | "felt.add" =>
+    mkExpr Γ opStx (Op.addFelt)
   | "add" =>
     match opStx.args with
     | v₁Stx::v₂Stx::[] =>
@@ -227,218 +247,47 @@ info: {
 example : rewritePeephole (fuel := 100) p1 lhs = rewritePeepholeAt p1 1 lhs := by
   native_decide
 
+open MLIR AST MLIR2Simple in
+def eg1 : Com Simple (Ctxt.ofList []) .pure [.felt] :=
+  [simple_com| {
+    %c2 = "constFelt"() {value = 2} : () -> !felt.type
+    %c4 = "constFelt"() {value = 4} : () -> !felt.type
+    %c6 = "add"(%c2, %c4) : (!felt.type, !felt.type) -> !felt.type
+    %c8 = "add"(%c6, %c2) : (!felt.type, !felt.type) -> !felt.type
+    "return"(%c8) : (!felt.type) -> ()
+  }]
+
+def eg1val := Com.denote eg1 Ctxt.Valuation.nil
+
+/-- info: [8] -/
+#guard_msgs in #eval eg1val
+
+
+def compute : Com Simple (⟨[.felt]⟩) .pure [.felt, .felt] :=
+  [simple_com| {
+       %const_0 = "felt.const"() { value = 0 } : () -> !felt.type
+       %const_1 = felt.const 1
+       %1 = bool.cmp ne(%in, %const_0)
+       %inv = felt.inv %in
+       %4 = felt.neg %in
+       %5 = felt.mul %4, %inv
+       %out = felt.add %5, %const_1
+       function.return %out, %inv
+  }]
+
+/-!
+
+  //   function.def @compute(%in: !felt.type) -> (!felt.type, !felt.type) {
+  //     %const_0 = felt.const 0
+  //     %const_1 = felt.const 1
+  //     %1 = bool.cmp ne(%in, %const_0)
+  //     %inv = felt.inv %in
+  //     %4 = felt.neg %in
+  //     %5 = felt.mul %4, %inv
+  //     %out = felt.add %5, %const_1
+  //     function.return %out, %inv
+  //   }
+
+-/
+
 end ToyNoRegion
-
-namespace ToyRegion
-
-inductive Ty
-  | int
-  deriving DecidableEq, Repr
-
-@[reducible]
-instance : TyDenote Ty where
-  toType
-    | .int => BitVec 32
-
-instance : Inhabited (TyDenote.toType (t : Ty)) where
-  default := by
-    cases t
-    exact (0#32)
-
-inductive Op :  Type
-  | add : Op
-  | const : (val : ℤ) → Op
-  | iterate (k : ℕ) : Op
-  deriving DecidableEq, Repr
-
-instance : Repr Op where
-  reprPrec
-    | .add, _ => "ToyRegion.Op.add"
-    | .const n , _ => f!"ToyRegion.Op.const {n}"
-    | .iterate n , _ => f!"ToyRegion.Op.iterate {n} "
-
-/-- A simple example dialect with regions -/
-abbrev SimpleReg : Dialect where
-  Op := Op
-  Ty := Ty
-
-abbrev SimpleReg.int : SimpleReg.Ty := .int
-open SimpleReg (int)
-
-def_signature for SimpleReg
-  | .const _    => () → .int
-  | .add        => (.int, .int) → .int
-  | .iterate _  => { (.int) → [.int] } → (.int) -[.pure]-> .int
-
-def_denote for SimpleReg
-  | .const n    => [BitVec.ofInt 32 n]ₕ
-  | .add        => fun a b => [a + b]ₕ
-  | .iterate k  => fun x f =>
-      let f := fun y => (f y).getN 0
-      [f^[k] x]ₕ
-
-/-
-TODO: the current `denote` function puts the regular arguments *before* the regions,
-      which is then preserved by `def_denote` prettification,
-      but the `def_signature` syntax suggests the other order.
-      Some solutions:
-      * Flip the signature syntax (but that'd look ugly!)
-      * Flip the order in `hvectorFun(…)` elab (but that's inelegant)
-      * Flip the order in `denote`s definition (the "elegant" solution,
-          but that's a pretty big refactor!)
--/
-
-@[reducible]
-instance : DialectDenote SimpleReg where
-  denote
-    | .const n, _, _ => BitVec.ofInt 32 n ::ₕ .nil
-    | .add, [(a : BitVec 32), (b : BitVec 32)]ₕ , _ => a + b ::ₕ .nil
-    | .iterate k, [(x : BitVec 32)]ₕ, [(f : _ → _)]ₕ =>
-      let f := fun y => (f y).getN 0
-      let f' (v :  BitVec 32) : BitVec 32 := f (Ctxt.Valuation.nil.snoc v)
-      let y := k.iterate f' x
-      [y]ₕ
-
-@[simp_denote]
-def cst {Γ : Ctxt _} (n : ℤ) : Expr SimpleReg Γ .pure [int] :=
-  Expr.mk
-    (op := .const n)
-    (eff_le := by constructor)
-    (ty_eq := rfl)
-    (args := .nil)
-    (regArgs := .nil)
-
-@[simp_denote]
-def add {Γ : Ctxt _} (e₁ e₂ : Var Γ int) : Expr SimpleReg Γ .pure [int] :=
-  Expr.mk
-    (op := .add)
-    (eff_le := by constructor)
-    (ty_eq := rfl)
-    (args := .cons e₁ <| .cons e₂ .nil)
-    (regArgs := .nil)
-
-@[simp_denote]
-def iterate {Γ : Ctxt _} (k : Nat) (input : Var Γ int) (body : Com SimpleReg ⟨[int]⟩ .impure [int]) :
-    Expr SimpleReg Γ .pure [int] :=
-  Expr.mk
-    (op := Op.iterate k)
-    (eff_le := by constructor)
-    (ty_eq := rfl)
-    (args := .cons input .nil)
-    (regArgs := HVector.cons body HVector.nil)
-
-attribute [local simp] Ctxt.snoc
-
-namespace P1
-/-- running `f(x) = x + x` 0 times is the identity. -/
-def lhs : Com SimpleReg ⟨[int]⟩ .pure [int] :=
-  Com.var (iterate (k := 0) (⟨0, by simp⟩) (
-      Com.letPure (add ⟨0, by simp⟩ ⟨0, by simp⟩) -- fun x => (x + x)
-      <| Com.rets [⟨0, rfl⟩]ₕ
-  )) <|
-  Com.rets [⟨0, by rfl⟩]ₕ
-
-def rhs : Com SimpleReg ⟨[int]⟩ .pure [int] :=
-  Com.rets [⟨0, by rfl⟩]ₕ
-
-attribute [local simp] Ctxt.snoc
---
--- set_option trace.Meta.Tactic.simp true in
-open Ctxt (Var Valuation DerivedCtxt) in
-
-def p1 : PeepholeRewrite SimpleReg [int] [int] :=
-  { lhs := lhs, rhs := rhs, correct := by
-      rw [lhs, rhs]
-      simp_peephole
-      -- ∀ (a : BitVec 32), (fun v => v + v)^[0] a = a
-      simp [Function.iterate_zero]
-  }
-
-/-
-def ex1' : Com Simple  (Ctxt.ofList [.int]) .int := rewritePeepholeAt p1 1 lhs
-
-theorem EX1' : ex1' = (
-  -- %c0 = 0
-  Com.var (cst 0) <|
-  -- %out_dead = %x + %c0
-  Com.var (add ⟨1, rfl⟩ ⟨0, rfl⟩ ) <| -- %out = %x + %c0
-  -- ret %c0
-  Com.rets [⟨2, rfl⟩]ₕ)
-  := by rfl
--/
-
-end P1
-
-namespace P2
-
-/-- running `f(x) = x + 0` 0 times is the identity. -/
-def lhs : Com SimpleReg ⟨[int]⟩ .pure [int] :=
-  Com.var (cst 0) <| -- %c0
-  Com.var (add ⟨0, rfl⟩ ⟨1, rfl⟩) <| -- %out = %x + %c0
-  Com.rets [⟨0, rfl⟩]ₕ
-
-def rhs : Com SimpleReg ⟨[int]⟩ .pure [int] :=
-  Com.rets [⟨0, rfl⟩]ₕ
-
-def p2 : PeepholeRewrite SimpleReg [int] [int] :=
-  { lhs := lhs, rhs := rhs, correct := by
-      rw [lhs, rhs]
-      simp_peephole
-      --  ∀ (a : BitVec 32), a + BitVec.ofInt 32 0 = a
-      simp
-  }
-
-/--
-example program that has the pattern 'x + 0' both at the top level,
-and inside a region in an iterate. -/
-def egLhs : Com SimpleReg ⟨[int]⟩ .pure [int] :=
-  Com.var (cst 0) <|
-  Com.var (add ⟨0, rfl⟩ ⟨1, rfl⟩) <| -- %out = %x + %c0
-  Com.var (iterate (k := 0) (⟨0, rfl⟩) (
-      Com.letPure (cst 0) <|
-      Com.letPure (add ⟨0, rfl⟩ ⟨1, rfl⟩) -- fun x => (x + x)
-      <| Com.rets [⟨0, rfl⟩]ₕ
-  )) <|
-  Com.rets [⟨0, rfl⟩]ₕ
-
-/--
-info: {
-  ^entry(%0 : ToyRegion.Ty.int):
-    %1 = ToyRegion.Op.const 0 : () → (ToyRegion.Ty.int)
-    %2 = ToyRegion.Op.add(%1, %0) : (ToyRegion.Ty.int, ToyRegion.Ty.int) → (ToyRegion.Ty.int)
-    %3 = ToyRegion.Op.iterate 0 (%2) ({
-      ^entry(%0 : ToyRegion.Ty.int):
-        %1 = ToyRegion.Op.const 0 : () → (ToyRegion.Ty.int)
-        %2 = ToyRegion.Op.add(%1, %0) : (ToyRegion.Ty.int, ToyRegion.Ty.int) → (ToyRegion.Ty.int)
-        return %2 : (ToyRegion.Ty.int) → ()
-    }) : (ToyRegion.Ty.int) → (ToyRegion.Ty.int)
-    return %3 : (ToyRegion.Ty.int) → ()
-}
--/
-#guard_msgs in #eval egLhs
-
-def runRewriteOnLhs : Com SimpleReg ⟨[int]⟩ .pure [int] :=
-  (rewritePeepholeRecursively (fuel := 100) p2 egLhs).val
-
-/--
-info: {
-  ^entry(%0 : ToyRegion.Ty.int):
-    %1 = ToyRegion.Op.const 0 : () → (ToyRegion.Ty.int)
-    %2 = ToyRegion.Op.add(%1, %0) : (ToyRegion.Ty.int, ToyRegion.Ty.int) → (ToyRegion.Ty.int)
-    %3 = ToyRegion.Op.iterate 0 (%0) ({
-      ^entry(%0 : ToyRegion.Ty.int):
-        %1 = ToyRegion.Op.const 0 : () → (ToyRegion.Ty.int)
-        %2 = ToyRegion.Op.add(%1, %0) : (ToyRegion.Ty.int, ToyRegion.Ty.int) → (ToyRegion.Ty.int)
-        return %0 : (ToyRegion.Ty.int) → ()
-    }) : (ToyRegion.Ty.int) → (ToyRegion.Ty.int)
-    return %3 : (ToyRegion.Ty.int) → ()
-}
--/
-#guard_msgs in #eval runRewriteOnLhs
-
-theorem rewriteDidSomething : runRewriteOnLhs ≠ lhs := by
-  native_decide
-
-end P2
-
-end ToyRegion
