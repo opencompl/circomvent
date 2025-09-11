@@ -29,6 +29,9 @@ inductive Ty
 @[grind=]
 def BabyBear := 2^31 - 2^27 + 1
 
+instance : Fact (BabyBear.Prime) := by
+  native_decide
+
 @[reducible]
 instance : TyDenote Ty where
   toType
@@ -374,8 +377,6 @@ theorem complete_isZero : isZero.Complete := by
   simp
   repeat rw [Valuation.append_cons]
   simp_peephole
-  have : Fact BabyBear.Prime := by
-    native_decide
   by_cases hi : i = 0
   · grind
   · grind
