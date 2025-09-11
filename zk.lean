@@ -511,13 +511,7 @@ theorem program_WellFormed : (program p).WellFormed := by
       Program.execute_go_nil_eq]
     simp only [ConstraintSystem.IsSat, Fin.isValue, List.mem_cons, List.not_mem_nil, or_false,
       forall_eq_or_imp, map_sub, forall_eq]
-    constructor
-    · simp [PolyExpr.toPolynomial, Env, envUpdate]
-      simp [envExists]
-    · simp [PolyExpr.toPolynomial, Env, envUpdate]
-      by_cases h : envIn 0 = 0
-      · simp [h]
-      · simp [h]
+    constructor <;> simp [PolyExpr.toPolynomial, Env, envUpdate] <;> grind
   · intros envIn envExists envOut
     simp [Program.toConstraintSystem, program, ConstraintSystem.IsSat,
       PolyExpr.toPolynomial, Env, envUpdate,
@@ -527,34 +521,8 @@ theorem program_WellFormed : (program p).WellFormed := by
       Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
       Stmt.execute_go_constraint_some_eq, Stmt.execute_go_constraint_none_eq,
       Program.execute_go_nil_eq]
-    intros hrel hval
-    rcases hval with hval | hval
-    · simp [hval] at hrel ⊢
-      ext i
-      have : i = 0 := by omega
-      subst this
-      simp
-      -- | Beyond this point, we should have proof automation for fields.
-      -- · fact1 ∧ fact2 ∧ ... ∧ factn => goal
-      -- · goal ∈ I(fact1, fact2, ..., factn)
-      -- Grind should solve this, as it can solve the horn fragment of commring + characteristic facts,
-      -- but it times out.
-      rw [add_neg_eq_zero] at hrel
-      simp [hrel]
-    · ext i
-      have : i = 0 := by omega
-      subst this
-      simp [hval] at hrel ⊢
-      by_cases hx : envIn 0 = 0
-      · simp [hx] at hrel ⊢
-      -- | Beyond this point, we should have proof automation for fields.
-      -- Grind should solve this, as it can solve the horn fragment of commring + characteristic facts,
-      -- but it times out.
-      · have : (envIn 0) * (envIn 0)⁻¹ = 1 := by
-          apply Field.mul_inv_cancel
-          simp [hx]
-        rw [this]
-        ring
+    grind
+
 /--
 info: 'Circomvent.IsZeroCircuit.program_WellFormed' depends on axioms: [propext, Classical.choice, Quot.sound]
 -/
@@ -579,11 +547,7 @@ theorem program_det_Deterministic : (program_det p).Determinstic := by
     rw [←h1'] at heq
     simp at heq
     by_cases hx : envIn 0 = 0
-    · have hOutNe0 : ¬(envOut 0 = 0) := by
-        simp [hx] at h1
-        rw [add_neg_eq_zero] at h1
-        rw [←h1]
-        norm_num
+    · have hOutNe0 : ¬(envOut 0 = 0) := by grind
       simp [hOutNe0] at h3 h3' ⊢
       rw [←h3'] at h3
       ext i
@@ -597,19 +561,13 @@ theorem program_det_Deterministic : (program_det p).Determinstic := by
 -- A direct, and application-specific definition of soundness.
 -- TODO, this does not include the case that envIn != 0
 theorem program_IsZero_Semantics :
-  ∀ (envIn : (Fin 1) → ZMod p) (envExists : (Fin 1) → ZMod p) (envOut : (Fin 1) → ZMod p),
-  (program p).toConstraintSystem.IsSat (Env envIn envExists envOut) →
-  (envIn 0 = 0 ↔ envOut 0 = 1)
-  := by
-    intros envIn envExists envOut
-    simp [program, ConstraintSystem.IsSat, PolyExpr.toPolynomial, Env]
-    intros h1 h2
-    by_cases hx : envIn 0 = 0
-    · simp [hx] at h1 ⊢
-      rw [add_neg_eq_zero] at h1
-      simp [h1]
-    · simp [hx] at h2 ⊢
-      simp [h2]
+    ∀ (envIn : (Fin 1) → ZMod p) (envExists : (Fin 1) → ZMod p) (envOut : (Fin 1) → ZMod p),
+    (program p).toConstraintSystem.IsSat (Env envIn envExists envOut) →
+    (envIn 0 = 0 ↔ envOut 0 = 1)
+    := by
+  intros envIn envExists envOut
+  simp [program, ConstraintSystem.IsSat, PolyExpr.toPolynomial, Env]
+  grind
 
 
 end IsZeroCircuit
