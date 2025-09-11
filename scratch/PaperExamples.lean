@@ -5,6 +5,7 @@ import Qq
 import Lean
 import Mathlib.Logic.Function.Iterate
 import Mathlib.Tactic.Ring
+import Mathlib
 
 import SSA.Core
 
@@ -20,15 +21,20 @@ namespace ToyNoRegion
 
 inductive Ty
   | int
+  | felt
   deriving DecidableEq, Repr, Lean.ToExpr
+
+def BabyBear := 2^31 - 2^27 + 1
 
 @[reducible]
 instance : TyDenote Ty where
   toType
     | .int => BitVec 32
+    | .felt => ZMod BabyBear
 
 inductive Op : Type
   | add : Op
+  | addFelt : Op
   | const : (val : ℤ) → Op
   deriving DecidableEq, Repr, Lean.ToExpr
 
@@ -46,11 +52,13 @@ instance : DialectToExpr Simple where
 
 def_signature for Simple
   | .add      => (.int, .int) → .int
+  | .addFelt  => (.felt, .felt) → .felt
   | .const _  => () → .int
 
 def_denote for Simple
   | .const n => BitVec.ofInt 32 n ::ₕ .nil
   | .add     => fun a b => a + b ::ₕ .nil
+  | .addFelt => fun a b => a + b ::ₕ .nil
 
 def cst {Γ : Ctxt _} (n : ℤ) : Expr Simple Γ .pure [.int]  :=
   Expr.mk
@@ -63,6 +71,14 @@ def cst {Γ : Ctxt _} (n : ℤ) : Expr Simple Γ .pure [.int]  :=
 def add {Γ : Ctxt _} (e₁ e₂ : Var Γ .int) : Expr Simple Γ .pure [.int] :=
   Expr.mk
     (op := .add)
+    (eff_le := by constructor)
+    (ty_eq := rfl)
+    (args := .cons e₁ <| .cons e₂ .nil)
+    (regArgs := .nil)
+
+def addFelt {Γ : Ctxt _} (e₁ e₂ : Var Γ .felt) : Expr Simple Γ .pure [.felt] :=
+  Expr.mk
+    (op := .addFelt)
     (eff_le := by constructor)
     (ty_eq := rfl)
     (args := .cons e₁ <| .cons e₂ .nil)
@@ -90,9 +106,13 @@ def mkExpr (Γ : Ctxt _) (opStx : MLIR.AST.Op 0) :
   | "add" =>
     match opStx.args with
     | v₁Stx::v₂Stx::[] =>
-      let ⟨.int, v₁⟩ ← MLIR.AST.TypedSSAVal.mkVal Γ v₁Stx
-      let ⟨.int, v₂⟩ ← MLIR.AST.TypedSSAVal.mkVal Γ v₂Stx
-      return ⟨.pure, [.int], add v₁ v₂⟩
+      let ⟨argty1, v₁⟩ ← MLIR.AST.TypedSSAVal.mkVal Γ v₁Stx
+      let ⟨argty2, v₂⟩ ← MLIR.AST.TypedSSAVal.mkVal Γ v₂Stx
+      match argty1, argty2 with
+      | .int, .int => return ⟨.pure, [.int], add v₁ v₂⟩
+      | .felt, .felt => return ⟨.pure, [.felt], addFelt v₁ v₂⟩
+      | _, _ => throw <| .generic (
+        s!"left and right operands do not have the same type")
     | _ => throw <| .generic (
         s!"expected two operands for `add`, found #'{opStx.args.length}' in '{repr opStx.args}'")
   | _ => throw <| .unsupportedOp s!"unsupported operation {repr opStx}"
