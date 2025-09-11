@@ -11,7 +11,6 @@
 -- import Mathlib.Data.List.ToFinsupp
 -- import Mathlib.Data.List.Basic
 import Mathlib
-import CompPoly.CMvPolynomial
 
 /-# Example IsZero Program
 
@@ -45,7 +44,6 @@ template IsZero() {
 
 namespace Circomvent
 
-open CPoly
 open Polynomial
 
 inductive Var (ι ε ω : Type)
@@ -182,7 +180,7 @@ theorem eval_sub {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) :
     (e1 - e2).eval = fun env => (e1.eval env) - (e2.eval env) := by
   ext a
-  simp [sub, eval]
+  simp [eval]
   ring
 
 @[simp]
@@ -190,7 +188,7 @@ theorem toPolynomial_sub {α : Type} {p : Nat}
     (e1 e2 : PolyExpr α p) :
     (e1 - e2).toPolynomial = (e1.toPolynomial) - (e2.toPolynomial) := by
   ext
-  simp [sub, toPolynomial]
+  simp [toPolynomial]
   ring
 
 end PolyExpr
@@ -399,7 +397,7 @@ theorem Stmt.execute_go_assign_eq
   rfl
 
 @[simp]
-theorem Stmt.exevute_go_constraint_none_eq
+theorem Stmt.execute_go_constraint_none_eq
     [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
     {p : Nat}
     (env : (Var ι ε ω) → (ZMod p))
@@ -454,28 +452,35 @@ noncomputable def Program.execute
     | _ => 0) prog.stmts
   fun o => env' (Var.output o)
 
+def Env (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p)
+  := fun var => match var with
+      | Var.input i => envIn i
+      | Var.existential e => envExists e
+      | Var.output o => envOut o
+
 structure Program.WellFormed
   [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
   (program : Program ι ε ω p) : Prop where
   hcomplete : ∀ (envIn : ι → ZMod p), ∃ (envExists : ε → ZMod p),
-      (Program.toConstraintSystem program).IsSat fun var =>
-        match var with
-        | Var.input i => envIn i
-        | Var.existential e => envExists e
-        | Var.output o => program.execute envIn o
-
+      (Program.toConstraintSystem program).IsSat (Env envIn envExists (program.execute envIn))
   hsound :
     ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envOut : ω → ZMod p),
-      (hModel : (Program.toConstraintSystem program).IsSat (fun var =>
-        match var with
-        | Var.input i => envIn i
-        | Var.existential e => envExists e
-        | Var.output o => envOut o)) →
+      (Program.toConstraintSystem program).IsSat (Env envIn envExists envOut) →
       (envOut = program.execute envIn)
+
+-- A program is "determinstic" if for exists at most one witness for any given (input, output) pair
+-- This property is sometimes useful to show, in particular when it is difficult to show soundness wrt
+-- a particular determinstic witness calculator.
+structure Program.Determinstic
+  [DecidableEq ι] [DecidableEq ε] [DecidableEq ω]
+  (program : Program ι ε ω p) : Prop where
+  hdeterministic : ∀ (envIn : ι → ZMod p) (envExists : ε → ZMod p) (envExists' : ε → ZMod p) (envOut : ω → ZMod p),
+    (Program.toConstraintSystem program).IsSat (Env envIn envExists envOut)
+    ∧ (Program.toConstraintSystem program).IsSat (Env envIn envExists' envOut)
+    → envExists = envExists'
 
 namespace IsZeroCircuit
 
-infix : 20 " e≠ " => BoolExpr.ne
 notation "in(" i ")" => Var.input i
 notation "out(" o ")" => Var.output o
 notation "inv(" e ")" => Var.existential e
@@ -489,10 +494,9 @@ def program : Program (Fin 1) (Fin 1) (Fin 1) p :=
   { stmts := [
     inv(0) <<- .field (.var in(0))⁻¹,
     (out(0)) <<= -(.var (in(0))) * (.var (inv(0))) + 1,
-    (((.var (in(0))) * (.var (out(0))))) === 0
+    (((.var (in(0))) * (.var (out(0))))) === 0,
     ]}
 
-#synth Field (ZMod 3)
 theorem program_WellFormed : (program p).WellFormed := by
   constructor
   · intros envIn
@@ -503,58 +507,68 @@ theorem program_WellFormed : (program p).WellFormed := by
       Var.mapInput, Var.map, id_eq, PolyExpr.toPolynomial_sub,
       Program.toConstraintSystem_constraint_none_cons_eq, Program.toConstraintSystem_go_nil_eq,
       Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
-      Stmt.execute_go_constraint_some_eq, Stmt.exevute_go_constraint_none_eq,
+      Stmt.execute_go_constraint_some_eq, Stmt.execute_go_constraint_none_eq,
       Program.execute_go_nil_eq]
     simp only [ConstraintSystem.IsSat, Fin.isValue, List.mem_cons, List.not_mem_nil, or_false,
       forall_eq_or_imp, map_sub, forall_eq]
-    constructor
-    · simp [PolyExpr.toPolynomial, envUpdate]
-      simp [envExists]
-    · simp [PolyExpr.toPolynomial, envUpdate]
-      by_cases h : envIn 0 = 0
-      · simp [h]
-      · simp [h]
+    constructor <;> simp [PolyExpr.toPolynomial, Env, envUpdate] <;> grind
   · intros envIn envExists envOut
     simp [Program.toConstraintSystem, program, ConstraintSystem.IsSat,
-      PolyExpr.toPolynomial, envUpdate,
+      PolyExpr.toPolynomial, Env, envUpdate,
       Program.toConstraintSystem_go_cons_eq, Program.toConstraintSystem_constraint_cons_eq,
-      Var.mapInput, Var.map, id_eq, PolyExpr.toPolynomial_sub,
+      Var.mapInput, Var.map, id_eq,
       Program.toConstraintSystem_constraint_none_cons_eq, Program.toConstraintSystem_go_nil_eq,
       Program.execute, Program.execute_go_cons_eq, Stmt.execute_go_assign_eq,
-      Stmt.execute_go_constraint_some_eq, Stmt.exevute_go_constraint_none_eq,
+      Stmt.execute_go_constraint_some_eq, Stmt.execute_go_constraint_none_eq,
       Program.execute_go_nil_eq]
-    intros hrel hval
-    rcases hval with hval | hval
-    · simp [hval] at hrel ⊢
-      ext i
-      have : i = 0 := by omega
-      subst this
-      simp
-      -- | Beyond this point, we should have proof automation for fields.
-      -- · fact1 ∧ fact2 ∧ ... ∧ factn => goal
-      -- · goal ∈ I(fact1, fact2, ..., factn)
-      -- Grind should solve this, as it can solve the horn fragment of commring + characteristic facts,
-      -- but it times out.
-      rw [add_neg_eq_zero] at hrel
-      simp [hrel]
-    · ext i
-      have : i = 0 := by omega
-      subst this
-      simp [hval] at hrel ⊢
-      by_cases hx : envIn 0 = 0
-      · simp [hx] at hrel ⊢
-      -- | Beyond this point, we should have proof automation for fields.
-      -- Grind should solve this, as it can solve the horn fragment of commring + characteristic facts,
-      -- but it times out.
-      · have : (envIn 0) * (envIn 0)⁻¹ = 1 := by
-          apply Field.mul_inv_cancel
-          simp [hx]
-        rw [this]
-        ring
+    grind
+
 /--
 info: 'Circomvent.IsZeroCircuit.program_WellFormed' depends on axioms: [propext, Classical.choice, Quot.sound]
 -/
 #guard_msgs in #print axioms program_WellFormed
+
+-- The IsZero program above is not Determinstic, since when in = 0, inv can be anything.
+-- This is a variation that is determinstic.
+def program_det : Program (Fin 1) (Fin 1) (Fin 1) p :=
+  { stmts := [
+    inv(0) <<- .field (.var in(0))⁻¹,
+    (out(0)) <<= -(.var (in(0))) * (.var (inv(0))) + 1,
+    (((.var (in(0))) * (.var (out(0))))) === 0,
+    (((.var (out(0))) * (.var (inv(0))))) === 0,
+    ]}
+
+theorem program_det_Deterministic : (program_det p).Determinstic := by
+  constructor
+  · intros envIn envExists envExists' envOut
+    simp [program_det, ConstraintSystem.IsSat, PolyExpr.toPolynomial, Env]
+    intros h1 _ h3 h1' _ h3'
+    have heq := h1
+    rw [←h1'] at heq
+    simp at heq
+    by_cases hx : envIn 0 = 0
+    · have hOutNe0 : ¬(envOut 0 = 0) := by grind
+      simp [hOutNe0] at h3 h3' ⊢
+      rw [←h3'] at h3
+      ext i
+      have i0 : i = 0 := by omega
+      simp [i0, h3]
+    · simp [hx] at heq
+      ext i
+      have i0 : i = 0 := by omega
+      simp [i0, heq]
+
+-- A direct, and application-specific definition of soundness.
+-- TODO, this does not include the case that envIn != 0
+theorem program_IsZero_Semantics :
+    ∀ (envIn : (Fin 1) → ZMod p) (envExists : (Fin 1) → ZMod p) (envOut : (Fin 1) → ZMod p),
+    (program p).toConstraintSystem.IsSat (Env envIn envExists envOut) →
+    (envIn 0 = 0 ↔ envOut 0 = 1)
+    := by
+  intros envIn envExists envOut
+  simp [program, ConstraintSystem.IsSat, PolyExpr.toPolynomial, Env]
+  grind
+
 
 end IsZeroCircuit
 

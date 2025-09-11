@@ -1,0 +1,72 @@
+// RUN: llzk-opt -split-input-file %s 2>&1 | FileCheck --enable-var-scope %s
+
+module attributes {veridise.lang = "llzk"} {
+  //////////////////////////////////////////////////////////////////////////////////
+  // template IsZero() {
+  //     signal input in;
+  //     signal output out;
+  //
+  //     signal inv;
+  //
+  //     inv <-- in!=0 ? 1/in : 0; // for now, consider this full line the semantics of `felt.inv`
+  //
+  //     out <== -in*inv +1;
+  //     in*out === 0;
+  // }
+  //////////////////////////////////////////////////////////////////////////////////
+  struct.def @IsZero {
+    struct.field @out: !felt.type {llzk.pub}
+    struct.field @inv: !felt.type
+
+    function.def @compute(%in: !felt.type) -> !struct.type<@IsZero> {
+      %self = struct.new : !struct.type<@IsZero>
+      %const_1 = felt.const 1
+      %inv = felt.inv %in
+      struct.writef %self[@inv] = %inv : !struct.type<@IsZero>, !felt.type
+      %4 = felt.neg %in
+      %5 = felt.mul %4, %inv
+      %out = felt.add %5, %const_1
+      struct.writef %self[@out] = %out : !struct.type<@IsZero>, !felt.type
+      function.return %self: !struct.type<@IsZero>
+    }
+
+    function.def @constrain(%self: !struct.type<@IsZero>, %in: !felt.type) {
+      %const_0 = felt.const 0
+      %const_1 = felt.const 1
+      %out = struct.readf %self[@out] : !struct.type<@IsZero>, !felt.type
+      %inv = struct.readf %self[@inv] : !struct.type<@IsZero>, !felt.type
+      %4 = felt.neg %in
+      %5 = felt.mul %4, %inv
+      %6 = felt.add %5, %const_1
+      constrain.eq %out, %6 : !felt.type
+      %7 = felt.mul %in, %out
+      constrain.eq %7, %const_0 : !felt.type
+      function.return
+    }
+  }
+
+  // LLZK-ish syntax using return/args instead of fields
+  // 
+  // struct.def @IsZero {
+  //   function.def @compute(%in: !felt.type) -> (!felt.type, !felt.type) {
+  //     %const_1 = felt.const 1
+  //     %inv = felt.inv %in
+  //     %4 = felt.neg %in
+  //     %5 = felt.mul %4, %inv
+  //     %out = felt.add %5, %const_1
+  //     function.return %out, %inv
+  //   }
+  //
+  //   function.def @constrain(%out: !felt.type, %inv !felt.type, %in: !felt.type) {
+  //     %const_0 = felt.const 0
+  //     %const_1 = felt.const 1
+  //     %4 = felt.neg %in
+  //     %5 = felt.mul %4, %inv
+  //     %6 = felt.add %5, %const_1
+  //     constrain.eq %out, %6 : !felt.type
+  //     %7 = felt.mul %in, %out
+  //     constrain.eq %7, %const_0 : !felt.type
+  //     function.return
+  //   }
+  // }
+}
