@@ -595,6 +595,7 @@ theorem program_det_Deterministic : (program_det p).Determinstic := by
       simp [i0, heq]
 
 -- A direct, and application-specific definition of soundness.
+-- TODO, this does not include the case that envIn != 0
 theorem program_IsZero_Semantics :
   ∀ (envIn : (Fin 1) → ZMod p) (envExists : (Fin 1) → ZMod p) (envOut : (Fin 1) → ZMod p),
   (program p).toConstraintSystem.IsSat (Env envIn envExists envOut) →
