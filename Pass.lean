@@ -212,6 +212,10 @@ def castLE (h : ι ≤ κ := by grind) : Expr p ι → Expr p κ
   | .sub e₁ e₂  => .sub e₁.castLE e₂.castLE
   | .mul e₁ e₂  => .mul e₁.castLE e₂.castLE
 
+@[simp] theorem castLE_rfl (e : Expr p ι) (h : ι ≤ ι) :
+    e.castLE h = e := by
+  sorry
+
 @[simp] theorem sizeOf_castLE (e : Expr p ι) (h : ι ≤ κ) :
     sizeOf (e.castLE h) = sizeOf e := by
   induction e <;> simp [castLE, *]
@@ -393,8 +397,22 @@ theorem Expr.maxDegree_lowerDegree {e : Expr p ι}
     (h_vars : vars.maxDegree ≤ 2) :
     e.lowerDegreeToTwo vars = ⟨κ', vars', e'⟩
     → vars'.maxDegree ≤ 2 ∧ e'.maxDegree ≤ 2 := by
+  -- suffices ∀ {ι'} {e : Expr p ι'} {h : ι' ≤ ι},
+  --   (e.castLE h).lowerDegreeToTwo vars = ⟨κ', vars', e'⟩
+  --   → vars'.maxDegree ≤ 2 ∧ e'.maxDegree ≤ 2
+  -- by
+  --   intro h
+  --   apply @this ι e (by rfl)
+  --   simpa using h
+
+  -- let k := sizeOf e
+  -- induction k using Nat.strong_induction_on
+
+  -- intro ι' e h_le h
+
   intro h
-  fun_induction lowerDegreeToTwo vars e <;> simp only [Sigma.mk.injEq] at h
+  fun_induction lowerDegreeToTwo vars e
+    <;> simp only [Sigma.mk.injEq] at h
   case case1 =>
     rcases h with ⟨rfl, h⟩
     simp only [Nat.add_zero, heq_eq_eq, Prod.mk.injEq] at h
@@ -405,12 +423,17 @@ theorem Expr.maxDegree_lowerDegree {e : Expr p ι}
     simp only [Nat.add_zero, heq_eq_eq, Prod.mk.injEq] at h
     rcases h with ⟨rfl, rfl⟩
     simp [maxDegree, h_vars]
-  case case3 ih₁ ih₂ =>
+  case case3 v₁ e₁' he₁ _ v₂ e₂' he₂ ih₁ ih₂ =>
     rcases h with ⟨rfl, h⟩
     simp only [heq_eq_eq, Prod.mk.injEq] at h
     rcases h with ⟨rfl, rfl⟩
     simp only [Assignments.maxDegree_castLE, maxDegree, maxDegree_castLE, sup_le_iff]
-    sorry
+
+    specialize @ih₁ v₁.castLE ?e h_vars
+    specialize @ih₂ v₂
+
+    · sorry
+    · sorry
   case case4 =>
     rcases h with ⟨rfl, h⟩
     simp only [heq_eq_eq, Prod.mk.injEq] at h
@@ -465,3 +488,4 @@ theorem Constraints.maxDegree_lowerDegree
       and_intros
       · assumption
       · apply Expr.maxDegree_lowerDegree₂
+        assumption
