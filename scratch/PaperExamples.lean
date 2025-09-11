@@ -150,6 +150,12 @@ def eg₀ : Com Simple (Ctxt.ofList []) .pure [.int] :=
   }]
 
 def eg₀val := Com.denote eg₀ Ctxt.Valuation.nil
+
+instance (a : Ty) : Repr ⟦a⟧ :=
+  match a with
+  | .felt => by simp [toType]; infer_instance
+  | .int => by simp [toType]; infer_instance
+
 /-- info: [0x00000008#32] -/
 #guard_msgs in #eval eg₀val
 
