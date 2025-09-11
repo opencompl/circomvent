@@ -4,13 +4,18 @@ defaultTargets = ["zk"]
 
 [[require]]
 name = "mathlib"
-git = "https://github.com/leanprover-community/mathlib4"
-rev = "v4.22.0-rc2"
+git = "https://github.com/leanprover-community/mathlib4-nightly-testing"
+rev = "nightly-testing-2025-08-11"
+
+#[[require]]
+#name = "CompPoly"
+#git = "https://github.com/NethermindEth/CompPoly.git"
+#rev = "master"
 
 [[require]]
-name = "CompPoly"
-git = "https://github.com/NethermindEth/CompPoly.git"
-rev = "master"
+name = "SSA"
+git = "https://github.com/opencompl/lean-mlir.git"
+rev = "main"
 
 [[lean_lib]]
 name = "zk"

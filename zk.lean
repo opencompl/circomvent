@@ -11,7 +11,6 @@
 -- import Mathlib.Data.List.ToFinsupp
 -- import Mathlib.Data.List.Basic
 import Mathlib
-import CompPoly.CMvPolynomial
 
 /-# Example IsZero Program
 
@@ -45,7 +44,6 @@ template IsZero() {
 
 namespace Circomvent
 
-open CPoly
 open Polynomial
 
 inductive Var (ι ε ω : Type)
