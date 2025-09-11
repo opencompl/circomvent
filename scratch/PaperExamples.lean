@@ -377,9 +377,7 @@ theorem complete_isZero : isZero.Complete := by
   simp
   repeat rw [Valuation.append_cons]
   simp_peephole
-  by_cases hi : i = 0
-  · grind
-  · grind
+  by_cases hi : i = 0 <;> grind
 
 /--
 info: 'ToyNoRegion.complete_isZero' depends on axioms: [propext,
