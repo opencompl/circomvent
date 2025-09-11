@@ -26,6 +26,7 @@ inductive Ty
   | felt
   deriving DecidableEq, Repr, Lean.ToExpr
 
+@[grind=]
 def BabyBear := 2^31 - 2^27 + 1
 
 @[reducible]
@@ -292,15 +293,15 @@ def compute : Com Simple (⟨[.felt]⟩) .pure [.felt, .felt] :=
       %4 = "felt.neg" (%input) : (!felt.type) -> (!felt.type)
       %5 = "felt.mul" (%4, %inv) : (!felt.type, !felt.type) -> (!felt.type)
       %out = "felt.add" (%5, %const_1) : (!felt.type, !felt.type) -> (!felt.type)
-      -- "return"(%out, %inv) : (!felt.type, !felt.type) -> ()
-      %c42 = "felt.const"() {value = 42} : () -> !felt.type
-      %c21 = "felt.const"() {value = 21} : () -> !felt.type
-      "return"(%c42, %c21) : (!felt.type, !felt.type) -> ()
+      "return"(%out, %inv) : (!felt.type, !felt.type) -> ()
+      -- %c42 = "felt.const"() {value = 42} : () -> !felt.type
+      -- %c21 = "felt.const"() {value = 21} : () -> !felt.type
+      -- "return"(%c42, %c21) : (!felt.type, !felt.type) -> ()
   }]
 
 def constrain : Com Simple (⟨[.felt, .felt, .felt]⟩) .impure [] :=
   [simple_com| {
-    ^bb0(%out: !felt.type, %inv: !felt.type, %arg1: !felt.type):
+    ^bb0(%arg1: !felt.type, %inv: !felt.type, %out: !felt.type):
       %0 = "felt.const"() <{value = 0 : !felt.type}> : () -> !felt.type
       %1 = "felt.const"() <{value = 1 : !felt.type}> : () -> !felt.type
       %4 = "felt.neg"(%arg1) : (!felt.type) -> !felt.type
@@ -317,7 +318,7 @@ def constrain : Com Simple (⟨[.felt, .felt, .felt]⟩) .impure [] :=
 
 /-- info: some [] -/ -- constraints pass
 #guard_msgs in
-#eval constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (0 : ZMod _))
+#eval constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
 
 /-- info: none -/ -- constraints fail
 #guard_msgs in
@@ -326,7 +327,7 @@ def constrain : Com Simple (⟨[.felt, .felt, .felt]⟩) .impure [] :=
 -- When input is `0` and output is `1` then `inv` is unconstrained!
 /-- info: some [] -/ -- constraints pass
 #guard_msgs in
-#eval constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (10 : ZMod _) |>.snoc (0 : ZMod _))
+#eval constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (10 : ZMod _) |>.snoc (1 : ZMod _))
 
 end isZero
 
@@ -348,13 +349,6 @@ def isZero : Program [.felt] [.felt] [.felt] where
   compute := isZero.compute
   constrain := isZero.constrain
 
-#eval
-  let is : HVector toType [Ty.felt] := [(42 : ZMod _)]ₕ
-  let es : HVector toType [Ty.felt] := [(53 : ZMod _)]ₕ
-  let os : HVector toType [Ty.felt] := [(21 : ZMod _)]ₕ
-  is ++ es ++ os
-
-
 def Program.Complete (p : Program ι ε ω) : Prop :=
   ∀ (is : Valuation ⟨ι⟩),
     let oes : HVector _ _ := p.compute.denote is
@@ -367,26 +361,68 @@ def Program.Sound (p : Program ι ε ω) : Prop :=
         let oes : HVector _ _ := p.compute.denote (.ofHVector is)
         oes = os ++ es'
 
-example : isZero.Complete := by
-  -- intro is
+@[simp, simp_denote]
+theorem ite_some_bind_isSome [Decidable c] :
+    ((if c then some a else none).bind f).isSome
+    = (c ∧ (f a).isSome) := by
+  by_cases hc : c <;> simp [hc]
+
+theorem complete_isZero : isZero.Complete := by
   unfold isZero isZero.compute isZero.constrain
   simp_peephole
   intro (i : ZMod _)
   simp
   repeat rw [Valuation.append_cons]
-  rw [Valuation.append_nil]
   simp_peephole
-  simp
-  /-
-    %0 = "felt.const"() <{value = 0 : !felt.type}> : () -> !felt.type
-    %1 = "felt.const"() <{value = 1 : !felt.type}> : () -> !felt.type
-    %4 = "felt.neg"(%arg1) : (!felt.type) -> !felt.type
-    %5 = "felt.mul"(%4, %inv) : (!felt.type, !felt.type) -> !felt.type
-    %6 = "felt.add"(%5, %1) : (!felt.type, !felt.type) -> !felt.type
-    %u1 = "constrain.eq"(%out, %6) : (!felt.type, !felt.type) -> (!felt.unit)
-  -/
-  have : i = -((-(i * i⁻¹) + 1) * i⁻¹) + 1 := by
-    sorry
-  simp only [this]
-  split_ifs
-  case neg => simp
+  have : Fact BabyBear.Prime := by
+    native_decide
+  by_cases hi : i = 0
+  · grind
+  · grind
+
+/--
+info: 'ToyNoRegion.complete_isZero' depends on axioms: [propext,
+ Classical.choice,
+ Lean.ofReduceBool,
+ Lean.trustCompiler,
+ Quot.sound]
+-/
+#guard_msgs in #print axioms complete_isZero
+
+
+-- theorem sound_isZero : isZero.Sound := by
+--   unfold isZero isZero.compute isZero.constrain Program.Sound
+--   simp_peephole
+--   -- intro (i : ZMod _)
+--   simp
+--   repeat rw [Valuation.append_cons]
+--   simp_peephole
+--   have : Fact BabyBear.Prime := by
+--     native_decide
+--   by_cases hi : i = 0
+--   · grind
+--   · grind
+
+
+
+/-!
+## Degree Lowering
+-/
+
+-- def HigherOrder : Com Simple [Ty.felt] .impure [] :=
+--   [simple_com| {
+--     ^bb0(%x: !felt.type):
+--       -- x * x * x * x * x + 1 -- x^5 + 1 === 0
+--       %x2 = "felt.mul" (%x, %x) : (!felt.type, !felt.type) -> !felt.type
+--       "return" () : () -> ()
+-- }]
+
+-- def LowerOrder : Constraints p 3 :=
+--   let x := Expr.var 0
+--   let y := Expr.var 1
+--   let z := Expr.var 2
+-- [
+--   x * x - y, -- x^2 === y
+--   y * y - z, -- y^2 === z
+--   x * z + 1  -- x * z + 1 === 0
+-- ]
