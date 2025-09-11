@@ -8,6 +8,7 @@ import Mathlib.Tactic.Ring
 import Mathlib
 
 import SSA.Core
+import SSA.Core.MLIRSyntax.Transform.Utils
 
 open BitVec
 open Ctxt(Var)
@@ -20,6 +21,7 @@ theorem BitVec.ofInt_zero (w : ℕ) :
 namespace ToyNoRegion
 
 inductive Ty
+  | unit
   | int
   | felt
   deriving DecidableEq, Repr, Lean.ToExpr
@@ -29,6 +31,7 @@ def BabyBear := 2^31 - 2^27 + 1
 @[reducible]
 instance : TyDenote Ty where
   toType
+    | .unit => Unit
     | .int => BitVec 32
     | .felt => ZMod BabyBear
 
@@ -37,12 +40,17 @@ deriving instance Lean.ToExpr for (ZMod BabyBear)
 inductive Op : Type
   | add : Op
   | addFelt : Op
+  | mulFelt : Op
+  | negFelt : Op
+  | invFelt : Op
   | const : (val : ℤ) → Op
   | constFelt : (val : ℤ) → Op
+  | constrainEq : Op
   deriving DecidableEq, Repr, Lean.ToExpr
 
 instance (a : Ty) : Repr ⟦a⟧ :=
   match a with
+  | .unit => by simp [toType]; infer_instance
   | .int => by simp [toType]; infer_instance
   | .felt => by simp [toType]; infer_instance
 
@@ -50,6 +58,7 @@ instance (a : Ty) : Repr ⟦a⟧ :=
 abbrev Simple : Dialect where
   Op := Op
   Ty := Ty
+  m := Option
 
 instance : ToString Ty where
   toString t := repr t |>.pretty
@@ -60,15 +69,26 @@ instance : DialectToExpr Simple where
 
 def_signature for Simple
   | .add      => (.int, .int) → .int
-  | .addFelt  => (.felt, .felt) → .felt
+  | .addFelt
+  | .mulFelt  => (.felt, .felt) → .felt
+  | .negFelt  => (.felt) → .felt
+  | .invFelt  => (.felt) → .felt
   | .const _  => () → .int
   | .constFelt _  => () → .felt
+  | .constrainEq => (.felt, .felt) -[.impure]-> .unit
 
 def_denote for Simple
   | .add     => fun a b => a + b ::ₕ .nil
-  | .addFelt => fun a b => a + b ::ₕ .nil
+  | .addFelt => fun a b => [a + b]ₕ
+  | .mulFelt => fun a b => [a * b]ₕ
+  | .negFelt => fun a => [-a]ₕ
+  | .invFelt => fun a => [(a⁻¹ : ZMod _)]ₕ
   | .const n => BitVec.ofInt 32 n ::ₕ .nil
   | .constFelt n => (n : ZMod BabyBear) ::ₕ .nil
+  | .constrainEq => fun a b => if a = b then some [()]ₕ else none
+
+example : (0 : ZMod BabyBear)⁻¹ = 0 := by
+  exact ZMod.inv_zero BabyBear
 
 def cst {Γ : Ctxt _} (n : ℤ) : Expr Simple Γ .pure [.int]  :=
   Expr.mk
@@ -110,6 +130,7 @@ def mkTy : MLIR.AST.MLIRType φ → MLIR.AST.ExceptM Simple Ty
   | MLIR.AST.MLIRType.int MLIR.AST.Signedness.Signless _ => do
     return .int
   | MLIR.AST.MLIRType.undefined "felt.type" => return .felt
+  | MLIR.AST.MLIRType.undefined "felt.unit" => return .unit
   | _ => throw .unsupportedType
 
 instance instTransformTy : MLIR.AST.TransformTy Simple 0 where
@@ -126,8 +147,11 @@ def mkExpr (Γ : Ctxt _) (opStx : MLIR.AST.Op 0) :
     match opStx.attrs.find_int "value" with
     | .some (v, _ty) => return ⟨.pure, [.felt], cstFelt v⟩
     | .none => throw <| .generic s!"expected 'const' to have int attr 'value', found: {repr opStx}"
-  | "felt.add" =>
-    mkExpr Γ opStx (Op.addFelt)
+  | "felt.add" => opStx.mkExprOf Γ Op.addFelt
+  | "felt.mul" => opStx.mkExprOf Γ Op.mulFelt
+  | "felt.neg" => opStx.mkExprOf Γ Op.negFelt
+  | "felt.inv" => opStx.mkExprOf Γ Op.invFelt
+  | "constrain.eq" => opStx.mkExprOf Γ Op.constrainEq
   | "add" =>
     match opStx.args with
     | v₁Stx::v₂Stx::[] =>
@@ -146,14 +170,10 @@ instance : MLIR.AST.TransformExpr Simple 0 where
   mkExpr := mkExpr
 
 def mkReturn (Γ : Ctxt _) (opStx : MLIR.AST.Op 0) :
-    MLIR.AST.ReaderM Simple (Σ eff ty, Com Simple Γ eff ty) :=
-  if opStx.name == "return"
-  then match opStx.args with
-  | vStx::[] => do
-    let ⟨ty, v⟩ ← MLIR.AST.TypedSSAVal.mkVal Γ vStx
-    return ⟨.pure, [ty], Com.ret v⟩
-  | _ => throw <| .generic (
-      s!"Ill-formed return statement (wrong arity, expected 1, got {opStx.args.length})")
+    MLIR.AST.ReaderM Simple (Σ eff ty, Com Simple Γ eff ty) := do
+  if opStx.name == "return" then
+    let args ← opStx.parseArgs Γ
+    return ⟨.pure, args.types, Com.rets args.toHVector⟩
   else throw <| .generic s!"Tried to build return out of non-return statement {opStx.name}"
 
 instance : MLIR.AST.TransformReturn Simple 0 where
@@ -250,10 +270,10 @@ example : rewritePeephole (fuel := 100) p1 lhs = rewritePeepholeAt p1 1 lhs := b
 open MLIR AST MLIR2Simple in
 def eg1 : Com Simple (Ctxt.ofList []) .pure [.felt] :=
   [simple_com| {
-    %c2 = "constFelt"() {value = 2} : () -> !felt.type
-    %c4 = "constFelt"() {value = 4} : () -> !felt.type
-    %c6 = "add"(%c2, %c4) : (!felt.type, !felt.type) -> !felt.type
-    %c8 = "add"(%c6, %c2) : (!felt.type, !felt.type) -> !felt.type
+    %c2 = "felt.const"() {value = 2} : () -> !felt.type
+    %c4 = "felt.const"() {value = 4} : () -> !felt.type
+    %c6 = "felt.add"(%c2, %c4) : (!felt.type, !felt.type) -> !felt.type
+    %c8 = "felt.add"(%c6, %c2) : (!felt.type, !felt.type) -> !felt.type
     "return"(%c8) : (!felt.type) -> ()
   }]
 
@@ -262,32 +282,111 @@ def eg1val := Com.denote eg1 Ctxt.Valuation.nil
 /-- info: [8] -/
 #guard_msgs in #eval eg1val
 
-
+namespace isZero
 def compute : Com Simple (⟨[.felt]⟩) .pure [.felt, .felt] :=
   [simple_com| {
-       %const_0 = "felt.const"() { value = 0 } : () -> !felt.type
-       %const_1 = felt.const 1
-       %1 = bool.cmp ne(%in, %const_0)
-       %inv = felt.inv %in
-       %4 = felt.neg %in
-       %5 = felt.mul %4, %inv
-       %out = felt.add %5, %const_1
-       function.return %out, %inv
+    ^entry(%input : !felt.type) :
+      %const_0 = "felt.const"() { value = 0 } : () -> !felt.type
+      %const_1 = "felt.const"() { value = 1 } : () -> !felt.type
+      %inv = "felt.inv"(%input) : (!felt.type) -> !felt.type
+      %4 = "felt.neg" (%input) : (!felt.type) -> (!felt.type)
+      %5 = "felt.mul" (%4, %inv) : (!felt.type, !felt.type) -> (!felt.type)
+      %out = "felt.add" (%5, %const_1) : (!felt.type, !felt.type) -> (!felt.type)
+      -- "return"(%out, %inv) : (!felt.type, !felt.type) -> ()
+      %c42 = "felt.const"() {value = 42} : () -> !felt.type
+      %c21 = "felt.const"() {value = 21} : () -> !felt.type
+      "return"(%c42, %c21) : (!felt.type, !felt.type) -> ()
   }]
 
+def constrain : Com Simple (⟨[.felt, .felt, .felt]⟩) .impure [] :=
+  [simple_com| {
+    ^bb0(%out: !felt.type, %inv: !felt.type, %arg1: !felt.type):
+      %0 = "felt.const"() <{value = 0 : !felt.type}> : () -> !felt.type
+      %1 = "felt.const"() <{value = 1 : !felt.type}> : () -> !felt.type
+      %4 = "felt.neg"(%arg1) : (!felt.type) -> !felt.type
+      %5 = "felt.mul"(%4, %inv) : (!felt.type, !felt.type) -> !felt.type
+      %6 = "felt.add"(%5, %1) : (!felt.type, !felt.type) -> !felt.type
+      %u1 = "constrain.eq"(%out, %6) : (!felt.type, !felt.type) -> (!felt.unit)
+      %7 = "felt.mul"(%arg1, %out) : (!felt.type, !felt.type) -> !felt.type
+      %u2 ="constrain.eq"(%7, %0) : (!felt.type, !felt.type) -> (!felt.unit)
+      "return"() : () -> ()
+}]
+
+#eval compute.denote (Ctxt.Valuation.nil.snoc <| (0 : ZMod _))
+#eval compute.denote (Ctxt.Valuation.nil.snoc <| (1 : ZMod _))
+
+/-- info: some [] -/ -- constraints pass
+#guard_msgs in
+#eval constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (0 : ZMod _))
+
+/-- info: none -/ -- constraints fail
+#guard_msgs in
+#eval constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
+
+-- When input is `0` and output is `1` then `inv` is unconstrained!
+/-- info: some [] -/ -- constraints pass
+#guard_msgs in
+#eval constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (10 : ZMod _) |>.snoc (0 : ZMod _))
+
+end isZero
+
+
 /-!
+## Program Wellformedness
+-/
+open Ctxt (Valuation)
 
-  //   function.def @compute(%in: !felt.type) -> (!felt.type, !felt.type) {
-  //     %const_0 = felt.const 0
-  //     %const_1 = felt.const 1
-  //     %1 = bool.cmp ne(%in, %const_0)
-  //     %inv = felt.inv %in
-  //     %4 = felt.neg %in
-  //     %5 = felt.mul %4, %inv
-  //     %out = felt.add %5, %const_1
-  //     function.return %out, %inv
-  //   }
+structure Program (inputs : List Simple.Ty) (existentials : List Simple.Ty) (outputs : List Simple.Ty) where
+  compute   : Com Simple inputs .pure (outputs ++ existentials)
+  constrain : Com Simple ((outputs ++ existentials) ++ inputs) .impure []
 
+/-!
+### isZero Program
 -/
 
-end ToyNoRegion
+def isZero : Program [.felt] [.felt] [.felt] where
+  compute := isZero.compute
+  constrain := isZero.constrain
+
+#eval
+  let is : HVector toType [Ty.felt] := [(42 : ZMod _)]ₕ
+  let es : HVector toType [Ty.felt] := [(53 : ZMod _)]ₕ
+  let os : HVector toType [Ty.felt] := [(21 : ZMod _)]ₕ
+  is ++ es ++ os
+
+
+def Program.Complete (p : Program ι ε ω) : Prop :=
+  ∀ (is : Valuation ⟨ι⟩),
+    let oes : HVector _ _ := p.compute.denote is
+    (p.constrain.denote (is ++ oes)).isSome
+
+def Program.Sound (p : Program ι ε ω) : Prop :=
+  ∀ (is : HVector toType ι) (es : HVector toType ε) (os : HVector toType ω),
+    (p.constrain.denote (.ofHVector <| (os ++ es) ++ is)).isSome
+    → ∃ (es' : HVector toType ε),
+        let oes : HVector _ _ := p.compute.denote (.ofHVector is)
+        oes = os ++ es'
+
+example : isZero.Complete := by
+  -- intro is
+  unfold isZero isZero.compute isZero.constrain
+  simp_peephole
+  intro (i : ZMod _)
+  simp
+  repeat rw [Valuation.append_cons]
+  rw [Valuation.append_nil]
+  simp_peephole
+  simp
+  /-
+    %0 = "felt.const"() <{value = 0 : !felt.type}> : () -> !felt.type
+    %1 = "felt.const"() <{value = 1 : !felt.type}> : () -> !felt.type
+    %4 = "felt.neg"(%arg1) : (!felt.type) -> !felt.type
+    %5 = "felt.mul"(%4, %inv) : (!felt.type, !felt.type) -> !felt.type
+    %6 = "felt.add"(%5, %1) : (!felt.type, !felt.type) -> !felt.type
+    %u1 = "constrain.eq"(%out, %6) : (!felt.type, !felt.type) -> (!felt.unit)
+  -/
+  have : i = -((-(i * i⁻¹) + 1) * i⁻¹) + 1 := by
+    sorry
+  simp only [this]
+  split_ifs
+  case neg => simp
