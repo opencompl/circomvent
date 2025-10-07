@@ -7,8 +7,9 @@ import Mathlib.Logic.Function.Iterate
 import Mathlib.Tactic.Ring
 import Mathlib
 
-import SSA.Core
-import SSA.Core.MLIRSyntax.Transform.Utils
+import LeanMLIR
+import SSA.Projects.SLLVM.Tactic
+-- import SSA.Core.MLIRSyntax.Transform.Utils
 
 open BitVec
 open Ctxt(Var)
@@ -21,7 +22,6 @@ theorem BitVec.ofInt_zero (w : ℕ) :
 namespace ToyNoRegion
 
 inductive Ty
-  | unit
   | int
   | felt
   deriving DecidableEq, Repr, Lean.ToExpr
@@ -35,7 +35,6 @@ instance : Fact (BabyBear.Prime) := by
 @[reducible]
 instance : TyDenote Ty where
   toType
-    | .unit => Unit
     | .int => BitVec 32
     | .felt => ZMod BabyBear
 
@@ -54,7 +53,6 @@ inductive Op : Type
 
 instance (a : Ty) : Repr ⟦a⟧ :=
   match a with
-  | .unit => by simp [toType]; infer_instance
   | .int => by simp [toType]; infer_instance
   | .felt => by simp [toType]; infer_instance
 
@@ -62,7 +60,7 @@ instance (a : Ty) : Repr ⟦a⟧ :=
 abbrev Simple : Dialect where
   Op := Op
   Ty := Ty
-  m := Option
+  m := PoisonOr
 
 instance : ToString Ty where
   toString t := repr t |>.pretty
@@ -79,7 +77,15 @@ def_signature for Simple
   | .invFelt  => (.felt) → .felt
   | .const _  => () → .int
   | .constFelt _  => () → .felt
-  | .constrainEq => (.felt, .felt) -[.impure]-> .unit
+  | .constrainEq => (.felt, .felt) -[.impure]-> []
+
+def Poison.assert (c : Prop) [Decidable c] : PoisonOr Unit :=
+  if c then .value () else .poison
+
+@[simp, simp_denote]
+theorem Poison.assert_bind_isPoison {c} [Decidable c]  :
+    ((assert c >>= f).isPoison) = (!decide c || (f ()).isPoison) := by
+  by_cases hc : c <;> simp [assert, hc]
 
 def_denote for Simple
   | .add     => fun a b => a + b ::ₕ .nil
@@ -89,7 +95,9 @@ def_denote for Simple
   | .invFelt => fun a => [(a⁻¹ : ZMod _)]ₕ
   | .const n => BitVec.ofInt 32 n ::ₕ .nil
   | .constFelt n => (n : ZMod BabyBear) ::ₕ .nil
-  | .constrainEq => fun a b => if a = b then some [()]ₕ else none
+  | .constrainEq => fun a b => do
+      Poison.assert (a = b)
+      return []ₕ
 
 example : (0 : ZMod BabyBear)⁻¹ = 0 := by
   exact ZMod.inv_zero BabyBear
@@ -134,7 +142,6 @@ def mkTy : MLIR.AST.MLIRType φ → MLIR.AST.ExceptM Simple Ty
   | MLIR.AST.MLIRType.int MLIR.AST.Signedness.Signless _ => do
     return .int
   | MLIR.AST.MLIRType.undefined "felt.type" => return .felt
-  | MLIR.AST.MLIRType.undefined "felt.unit" => return .unit
   | _ => throw .unsupportedType
 
 instance instTransformTy : MLIR.AST.TransformTy Simple 0 where
@@ -186,6 +193,26 @@ instance : MLIR.AST.TransformReturn Simple 0 where
 open Qq in
 elab "[simple_com| " reg:mlir_region "]" : term => SSA.elabIntoCom' reg (Simple)
 
+instance : DialectPrint Simple where
+  printOpName
+    | .add      => "add"
+    | .const _  => "const"
+    | .addFelt  => "felt.add"
+    | .mulFelt  => "felt.mul"
+    | .negFelt  => "felt.neg"
+    | .invFelt  => "felt.inv"
+    | .constFelt _ => "felt.const"
+    | .constrainEq => "constrain.eq"
+  printAttributes
+    | .const val
+    | .constFelt val => s!"\{value = {val}}"
+    | _ => ""
+  printTy
+    | .felt => "!felt.type"
+    | .int => "i32"
+  dialectName := "felt"
+  printReturn _ := "return"
+
 end MLIR2Simple
 
 open MLIR AST MLIR2Simple in
@@ -200,7 +227,7 @@ def eg₀ : Com Simple (Ctxt.ofList []) .pure [.int] :=
 
 def eg₀val := Com.denote eg₀ Ctxt.Valuation.nil
 
-/-- info: [0x00000008#32] -/
+/-- info: [8] -/
 #guard_msgs in #eval eg₀val
 
 open MLIR AST MLIR2Simple in
@@ -210,15 +237,15 @@ def lhs : Com Simple (Ctxt.ofList [.int]) .pure [.int] :=
     ^bb0(%x : i32):
       %c0 = "const" () { value = 0 : i32 } : () -> i32
       %out = "add" (%x, %c0) : (i32, i32) -> i32
-      "return" (%out) : (i32) -> (i32)
+      "return" (%out) : (i32) -> ()
   }]
 
 /--
 info: {
-  ^entry(%0 : ToyNoRegion.Ty.int):
-    %1 = ToyNoRegion.Op.const 0 : () → (ToyNoRegion.Ty.int)
-    %2 = ToyNoRegion.Op.add(%0, %1) : (ToyNoRegion.Ty.int, ToyNoRegion.Ty.int) → (ToyNoRegion.Ty.int)
-    return %2 : (ToyNoRegion.Ty.int) → ()
+  ^entry(%0 : i32):
+    %1 = "const"(){value = 0} : () -> (i32)
+    %2 = "add"(%0, %1) : (i32, i32) -> (i32)
+    "return"(%2) : (i32) -> ()
 }
 -/
 #guard_msgs in #eval lhs
@@ -228,14 +255,14 @@ open MLIR AST MLIR2Simple in
 def rhs : Com Simple (Ctxt.ofList [.int]) .pure [.int] :=
   [simple_com| {
     ^bb0(%x : i32):
-      "return" (%x) : (i32) -> (i32)
+      "return" (%x) : (i32) -> ()
   }]
 
 
 /--
 info: {
-  ^entry(%0 : ToyNoRegion.Ty.int):
-    return %0 : (ToyNoRegion.Ty.int) → ()
+  ^entry(%0 : i32):
+    "return"(%0) : (i32) -> ()
 }
 -/
 #guard_msgs in #eval rhs
@@ -261,10 +288,10 @@ def p1 : PeepholeRewrite Simple [.int] [.int] :=
 
 /--
 info: {
-  ^entry(%0 : ToyNoRegion.Ty.int):
-    %1 = ToyNoRegion.Op.const 0 : () → (ToyNoRegion.Ty.int)
-    %2 = ToyNoRegion.Op.add(%0, %1) : (ToyNoRegion.Ty.int, ToyNoRegion.Ty.int) → (ToyNoRegion.Ty.int)
-    return %0 : (ToyNoRegion.Ty.int) → ()
+  ^entry(%0 : i32):
+    %1 = "const"(){value = 0} : () -> (i32)
+    %2 = "add"(%0, %1) : (i32, i32) -> (i32)
+    "return"(%0) : (i32) -> ()
 }
 -/
 #guard_msgs (whitespace := lax) in #eval rewritePeepholeAt p1 1 lhs
@@ -318,65 +345,72 @@ def isZero : Program [.felt] [.felt] [.felt] where
       %4 = "felt.neg"(%arg1) : (!felt.type) -> !felt.type
       %5 = "felt.mul"(%4, %inv) : (!felt.type, !felt.type) -> !felt.type
       %6 = "felt.add"(%5, %1) : (!felt.type, !felt.type) -> !felt.type
-      %u1 = "constrain.eq"(%out, %6) : (!felt.type, !felt.type) -> (!felt.unit)
+      "constrain.eq"(%out, %6) : (!felt.type, !felt.type) -> ()
       %7 = "felt.mul"(%arg1, %out) : (!felt.type, !felt.type) -> !felt.type
-      %u2 ="constrain.eq"(%7, %0) : (!felt.type, !felt.type) -> (!felt.unit)
+      "constrain.eq"(%7, %0) : (!felt.type, !felt.type) -> ()
       "return"() : () -> ()
 }]
 
 /-!
 ## Checks
 -/
+open Ctxt (Valuation)
 
 /-- info: [1, 0] -/
 #guard_msgs in
-#eval isZero.compute.denote (Ctxt.Valuation.nil.snoc <| (0 : ZMod _))
+#eval isZero.compute.denote (Ctxt.Valuation.nil.cons <| (0 : ZMod _))
 
 /-- info: [0, 1] -/
 #guard_msgs in
-#eval isZero.compute.denote (Ctxt.Valuation.nil.snoc <| (1 : ZMod _))
+#eval isZero.compute.denote (Ctxt.Valuation.nil.cons <| (1 : ZMod _))
 
-/-- info: some [] -/ -- constraints pass
+/-- info: { toOption := some [] } -/
 #guard_msgs in
-#eval isZero.constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
+#eval isZero.constrain.denote (Valuation.ofHVector [(1 : ZMod _), (0 : ZMod _), (0 : ZMod _)]ₕ)
 
-/-- info: none -/ -- constraints fail
+/-- info: { toOption := none } -/
 #guard_msgs in
-#eval isZero.constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
+#eval isZero.constrain.denote (Valuation.ofHVector [(1 : ZMod _), (0 : ZMod _), (1 : ZMod _)]ₕ)
 
 -- When input is `0` and output is `1` then `inv` is unconstrained!
-/-- info: some [] -/ -- constraints pass
+/-- info: { toOption := some [] } -/
 #guard_msgs in
-#eval isZero.constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (10 : ZMod _) |>.snoc (1 : ZMod _))
+#eval isZero.constrain.denote (Valuation.ofHVector [(1 : ZMod _), (10 : ZMod _), (0 : ZMod _)]ₕ)
 
 
 
 def Program.Complete (p : Program ι ε ω) : Prop :=
   ∀ (is : Valuation ⟨ι⟩),
     let oes : HVector _ _ := p.compute.denote is
-    (p.constrain.denote (is ++ oes)).isSome
+    !(p.constrain.denote (oes ++ is)).isPoison
 
 def Program.Sound (p : Program ι ε ω) : Prop :=
   ∀ (is : HVector toType ι) (es : HVector toType ε) (os : HVector toType ω),
-    (p.constrain.denote (.ofHVector <| (os ++ es) ++ is)).isSome
+    !(p.constrain.denote (.ofHVector <| (os ++ es) ++ is)).isPoison
     → ∃ (es' : HVector toType ε),
         let oes : HVector _ _ := p.compute.denote (.ofHVector is)
         oes = os ++ es'
 
-@[simp, simp_denote]
-theorem ite_some_bind_isSome [Decidable c] :
-    ((if c then some a else none).bind f).isSome
-    = (c ∧ (f a).isSome) := by
-  by_cases hc : c <;> simp [hc]
+attribute [simp_denote]
+  Valuation.ofHVector_cons Valuation.ofHVector_nil
+  decide_true decide_false decide_eq_true_iff
+  Bool.not_true Bool.not_false Bool.not_not
+  Bool.true_or Bool.or_true Bool.false_or Bool.or_false
+  Bool.true_and Bool.and_true Bool.false_and Bool.and_false
+
+@[simp_denote, simp]
+theorem PoisonOr.isPoison_pure (x : α) :
+  PoisonOr.isPoison (pure x) = false := rfl
+
+@[simp_denote, simp]
+theorem toType_felt : toType Ty.felt = ZMod BabyBear := rfl
 
 theorem complete_isZero : isZero.Complete := by
   unfold isZero
   simp_peephole
-  intro (i : ZMod _)
-  simp
-  repeat rw [Valuation.append_cons]
-  simp_peephole
-  by_cases hi : i = 0 <;> grind
+  intro i
+  by_cases hi : i = 0
+  <;> grind
 
 /--
 info: 'ToyNoRegion.complete_isZero' depends on axioms: [propext,
@@ -389,7 +423,7 @@ info: 'ToyNoRegion.complete_isZero' depends on axioms: [propext,
 
 
 -- theorem sound_isZero : isZero.Sound := by
---   unfold isZero isZero.compute isZero.constrain Program.Sound
+--   unfold isZero Program.Sound
 --   simp_peephole
 --   -- intro (i : ZMod _)
 --   simp
