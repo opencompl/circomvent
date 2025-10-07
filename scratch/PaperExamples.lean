@@ -327,7 +327,13 @@ def isZero : Program [.felt] [.felt] [.felt] where
 /-!
 ## Checks
 -/
+
+/-- info: [1, 0] -/
+#guard_msgs in
 #eval isZero.compute.denote (Ctxt.Valuation.nil.snoc <| (0 : ZMod _))
+
+/-- info: [0, 1] -/
+#guard_msgs in
 #eval isZero.compute.denote (Ctxt.Valuation.nil.snoc <| (1 : ZMod _))
 
 /-- info: some [] -/ -- constraints pass
