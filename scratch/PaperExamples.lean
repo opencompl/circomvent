@@ -286,54 +286,6 @@ def eg1val := Com.denote eg1 Ctxt.Valuation.nil
 /-- info: [8] -/
 #guard_msgs in #eval eg1val
 
-namespace isZero
-def compute : Com Simple (⟨[.felt]⟩) .pure [.felt, .felt] :=
-  [simple_com| {
-    ^entry(%input : !felt.type) :
-      %const_0 = "felt.const"() { value = 0 } : () -> !felt.type
-      %const_1 = "felt.const"() { value = 1 } : () -> !felt.type
-      %inv = "felt.inv"(%input) : (!felt.type) -> !felt.type
-      %4 = "felt.neg" (%input) : (!felt.type) -> (!felt.type)
-      %5 = "felt.mul" (%4, %inv) : (!felt.type, !felt.type) -> (!felt.type)
-      %out = "felt.add" (%5, %const_1) : (!felt.type, !felt.type) -> (!felt.type)
-      "return"(%out, %inv) : (!felt.type, !felt.type) -> ()
-      -- %c42 = "felt.const"() {value = 42} : () -> !felt.type
-      -- %c21 = "felt.const"() {value = 21} : () -> !felt.type
-      -- "return"(%c42, %c21) : (!felt.type, !felt.type) -> ()
-  }]
-
-def constrain : Com Simple (⟨[.felt, .felt, .felt]⟩) .impure [] :=
-  [simple_com| {
-    ^bb0(%arg1: !felt.type, %inv: !felt.type, %out: !felt.type):
-      %0 = "felt.const"() <{value = 0 : !felt.type}> : () -> !felt.type
-      %1 = "felt.const"() <{value = 1 : !felt.type}> : () -> !felt.type
-      %4 = "felt.neg"(%arg1) : (!felt.type) -> !felt.type
-      %5 = "felt.mul"(%4, %inv) : (!felt.type, !felt.type) -> !felt.type
-      %6 = "felt.add"(%5, %1) : (!felt.type, !felt.type) -> !felt.type
-      %u1 = "constrain.eq"(%out, %6) : (!felt.type, !felt.type) -> (!felt.unit)
-      %7 = "felt.mul"(%arg1, %out) : (!felt.type, !felt.type) -> !felt.type
-      %u2 ="constrain.eq"(%7, %0) : (!felt.type, !felt.type) -> (!felt.unit)
-      "return"() : () -> ()
-}]
-
-#eval compute.denote (Ctxt.Valuation.nil.snoc <| (0 : ZMod _))
-#eval compute.denote (Ctxt.Valuation.nil.snoc <| (1 : ZMod _))
-
-/-- info: some [] -/ -- constraints pass
-#guard_msgs in
-#eval constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
-
-/-- info: none -/ -- constraints fail
-#guard_msgs in
-#eval constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
-
--- When input is `0` and output is `1` then `inv` is unconstrained!
-/-- info: some [] -/ -- constraints pass
-#guard_msgs in
-#eval constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (10 : ZMod _) |>.snoc (1 : ZMod _))
-
-end isZero
-
 
 /-!
 ## Program Wellformedness
@@ -349,8 +301,49 @@ structure Program (inputs : List Simple.Ty) (existentials : List Simple.Ty) (out
 -/
 
 def isZero : Program [.felt] [.felt] [.felt] where
-  compute := isZero.compute
-  constrain := isZero.constrain
+  compute := [simple_com| {
+    ^entry(%input : !felt.type) :
+      %const_0 = "felt.const"() { value = 0 } : () -> !felt.type
+      %const_1 = "felt.const"() { value = 1 } : () -> !felt.type
+      %inv = "felt.inv"(%input) : (!felt.type) -> !felt.type
+      %4 = "felt.neg" (%input) : (!felt.type) -> (!felt.type)
+      %5 = "felt.mul" (%4, %inv) : (!felt.type, !felt.type) -> (!felt.type)
+      %out = "felt.add" (%5, %const_1) : (!felt.type, !felt.type) -> (!felt.type)
+      "return"(%out, %inv) : (!felt.type, !felt.type) -> ()
+  }]
+  constrain := [simple_com| {
+    ^bb0(%arg1: !felt.type, %inv: !felt.type, %out: !felt.type):
+      %0 = "felt.const"() <{value = 0 : !felt.type}> : () -> !felt.type
+      %1 = "felt.const"() <{value = 1 : !felt.type}> : () -> !felt.type
+      %4 = "felt.neg"(%arg1) : (!felt.type) -> !felt.type
+      %5 = "felt.mul"(%4, %inv) : (!felt.type, !felt.type) -> !felt.type
+      %6 = "felt.add"(%5, %1) : (!felt.type, !felt.type) -> !felt.type
+      %u1 = "constrain.eq"(%out, %6) : (!felt.type, !felt.type) -> (!felt.unit)
+      %7 = "felt.mul"(%arg1, %out) : (!felt.type, !felt.type) -> !felt.type
+      %u2 ="constrain.eq"(%7, %0) : (!felt.type, !felt.type) -> (!felt.unit)
+      "return"() : () -> ()
+}]
+
+/-!
+## Checks
+-/
+#eval isZero.compute.denote (Ctxt.Valuation.nil.snoc <| (0 : ZMod _))
+#eval isZero.compute.denote (Ctxt.Valuation.nil.snoc <| (1 : ZMod _))
+
+/-- info: some [] -/ -- constraints pass
+#guard_msgs in
+#eval isZero.constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
+
+/-- info: none -/ -- constraints fail
+#guard_msgs in
+#eval isZero.constrain.denote (Ctxt.Valuation.nil.snoc (1 : ZMod _) |>.snoc (0 : ZMod _) |>.snoc (1 : ZMod _))
+
+-- When input is `0` and output is `1` then `inv` is unconstrained!
+/-- info: some [] -/ -- constraints pass
+#guard_msgs in
+#eval isZero.constrain.denote (Ctxt.Valuation.nil.snoc (0 : ZMod _) |>.snoc (10 : ZMod _) |>.snoc (1 : ZMod _))
+
+
 
 def Program.Complete (p : Program ι ε ω) : Prop :=
   ∀ (is : Valuation ⟨ι⟩),
@@ -371,7 +364,7 @@ theorem ite_some_bind_isSome [Decidable c] :
   by_cases hc : c <;> simp [hc]
 
 theorem complete_isZero : isZero.Complete := by
-  unfold isZero isZero.compute isZero.constrain
+  unfold isZero
   simp_peephole
   intro (i : ZMod _)
   simp
